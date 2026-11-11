@@ -85,9 +85,17 @@ export type VideoPlan = TranscodeVideoPlan | CopyVideoPlan;
 
 export interface AudioPlan {
   action: 'transcode' | 'copy';
+  /**
+   * `muxed`: audio travels inside the video segments.
+   * `separate`: its own HLS rendition (EXT-X-MEDIA TYPE=AUDIO), used when the
+   * video is copied but the audio must be transcoded.
+   */
+  delivery: 'muxed' | 'separate';
   streamIndex: number;
   channels: 1 | 2;
   codecString: 'mp4a.40.2';
+  /** ISO 639 language of the source stream, when tagged. */
+  language: string | undefined;
 }
 
 /** Facts about an indexed source that make stream copy possible. */
@@ -241,7 +249,6 @@ export function fitDimensions(
 function copyBlockers(
   info: MediaInfo,
   opts: { quality: Quality | 'auto'; caps: ClientCapabilities; copySource?: CopySource },
-  audioStream: AudioStreamInfo | undefined,
 ): PlanReason[] {
   const blockers: PlanReason[] = [];
   if (!opts.copySource) {
@@ -260,12 +267,6 @@ function copyBlockers(
     blockers.push({
       code: 'VIDEO_TRANSCODE_REQUIRED',
       message: `Source video ${info.video.codec}/${info.video.profile ?? '?'}/${info.video.pixFmt ?? '?'} is not decodable by this client.`,
-    });
-  }
-  if (audioStream && !isSafariCompatibleAudio(audioStream)) {
-    blockers.push({
-      code: 'AUDIO_BLOCKS_COPY',
-      message: `Audio ${audioStream.codec} ${audioStream.channels}ch needs transcoding; copy with a separate audio rendition is not implemented yet.`,
     });
   }
   const sourceQuality = qualityForHeight(info.video.height);
@@ -294,9 +295,10 @@ export function planPlayback(
   },
 ): PlaybackPlan {
   const audioForCopy = selectAudioStream(info.audio, opts.preferredAudioLanguage);
-  const blockers = copyBlockers(info, opts, audioForCopy);
+  const blockers = copyBlockers(info, opts);
   if (blockers.length === 0 && opts.copySource) {
     const { copySource } = opts;
+    const separateAudio = audioForCopy !== undefined && !isSafariCompatibleAudio(audioForCopy);
     return {
       video: {
         action: 'copy',
@@ -311,18 +313,31 @@ export function planPlayback(
       },
       audio: audioForCopy
         ? {
-            action: 'copy',
+            action: separateAudio ? 'transcode' : 'copy',
+            delivery: separateAudio ? 'separate' : 'muxed',
             streamIndex: audioForCopy.index,
-            channels: audioForCopy.channels === 1 ? 1 : 2,
+            channels: separateAudio || audioForCopy.channels !== 1 ? 2 : 1,
             codecString: 'mp4a.40.2',
+            language: audioForCopy.language,
           }
         : null,
-      bandwidth: Math.ceil((copySource.peakBitrate * 11) / 10),
+      // A separate rendition is selected together with the variant, so its rate counts too.
+      bandwidth: Math.ceil(
+        ((copySource.peakBitrate + (separateAudio ? AUDIO_BITRATE : 0)) * 11) / 10,
+      ),
       reasons: [
         {
           code: 'COPY',
           message: `Source ${info.video.codec} is streamed without re-encoding (${copySource.codecString}).`,
         },
+        ...(separateAudio
+          ? [
+              {
+                code: 'AUDIO_SEPARATE_RENDITION',
+                message: `Audio ${audioForCopy.codec} ${audioForCopy.channels}ch is transcoded to AAC-LC stereo as a separate rendition; video is not re-encoded.`,
+              },
+            ]
+          : []),
         ...(audioForCopy ? [] : [{ code: 'NO_AUDIO', message: 'Source has no audio stream.' }]),
       ],
     };
@@ -359,9 +374,11 @@ export function planPlayback(
   if (audioStream) {
     audio = {
       action: 'transcode',
+      delivery: 'muxed',
       streamIndex: audioStream.index,
       channels: 2,
       codecString: 'mp4a.40.2',
+      language: audioStream.language,
     };
     if (!isSafariCompatibleAudio(audioStream)) {
       reasons.push({

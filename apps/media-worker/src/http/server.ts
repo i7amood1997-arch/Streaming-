@@ -16,8 +16,13 @@ import {
   buildMediaPlaylist,
   buildSubtitlePlaylist,
 } from '@streaming/media-core';
-import { signStreamToken, verifyStreamToken } from '@streaming/media-core';
-import type { PlaybackSession } from '../session/playback-session.js';
+import {
+  languageInfo,
+  normalizeLanguage,
+  signStreamToken,
+  verifyStreamToken,
+} from '@streaming/media-core';
+import type { PlaybackSession, TrackKind } from '../session/playback-session.js';
 import type { SessionManager } from '../session/session-manager.js';
 import type { TorrentEngine } from '../torrent/engine.js';
 
@@ -39,6 +44,12 @@ export interface ServerDeps {
   manager: SessionManager;
   engine: TorrentEngine;
   logger?: boolean;
+}
+
+/** NAME shown in the native audio menu: the language's endonym when known. */
+function audioName(language: string | undefined): string {
+  const code = normalizeLanguage(language);
+  return code ? languageInfo(code).nativeName : 'Audio';
 }
 
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
@@ -186,6 +197,16 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
           frameRate: plan.video.frameRate,
           uri: 'video/index.m3u8',
           ...(plan.video.action === 'copy' ? { videoRange: plan.video.videoRange } : {}),
+          ...(plan.audio?.delivery === 'separate'
+            ? {
+                audio: {
+                  name: audioName(plan.audio.language),
+                  language: normalizeLanguage(plan.audio.language),
+                  channels: plan.audio.channels,
+                  uri: 'audio/index.m3u8',
+                },
+              }
+            : {}),
         },
         session.subtitles.map((s) => ({
           language: s.language,
@@ -198,33 +219,43 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     );
   });
 
-  app.get('/v1/hls/:sessionId/:token/video/index.m3u8', (req, reply) => {
-    const session = sessionFor(req);
-    return sendText(
-      reply,
-      CONTENT_TYPES.m3u8,
-      buildMediaPlaylist(session.timeline, {
-        init: 'init.mp4',
-        segment: (i) => `seg-${i}.m4s`,
-      }),
+  // Media playlists, init and segments for the video track and, when audio is a
+  // separate rendition, the audio track. Same routes, same on-demand pipeline.
+  const trackFor = (session: PlaybackSession, kind: TrackKind) => {
+    const track = session.track(kind);
+    if (!track) throw notFound(`${kind} track`);
+    return track;
+  };
+
+  for (const kind of ['video', 'audio'] as const) {
+    app.get(`/v1/hls/:sessionId/:token/${kind}/index.m3u8`, (req, reply) => {
+      const track = trackFor(sessionFor(req), kind);
+      return sendText(
+        reply,
+        CONTENT_TYPES.m3u8,
+        buildMediaPlaylist(track.timeline, {
+          init: 'init.mp4',
+          segment: (i) => `seg-${i}.m4s`,
+        }),
+      );
+    });
+
+    app.get(`/v1/hls/:sessionId/:token/${kind}/init.mp4`, async (req, reply) => {
+      const track = trackFor(sessionFor(req), kind);
+      return sendFile(reply, CONTENT_TYPES.mp4, await track.getInit());
+    });
+
+    app.get<{ Params: { file: string } }>(
+      `/v1/hls/:sessionId/:token/${kind}/:file`,
+      async (req, reply) => {
+        const track = trackFor(sessionFor(req), kind);
+        const match = /^seg-(\d{1,6})\.m4s$/.exec(req.params.file);
+        const index = match ? Number(match[1]) : -1;
+        if (index < 0 || index >= track.timeline.length) throw notFound('Segment');
+        return sendFile(reply, CONTENT_TYPES.m4s, await track.getSegment(index));
+      },
     );
-  });
-
-  app.get('/v1/hls/:sessionId/:token/video/init.mp4', async (req, reply) => {
-    const session = sessionFor(req);
-    return sendFile(reply, CONTENT_TYPES.mp4, await session.getInit());
-  });
-
-  app.get<{ Params: { file: string } }>(
-    '/v1/hls/:sessionId/:token/video/:file',
-    async (req, reply) => {
-      const session = sessionFor(req);
-      const match = /^seg-(\d{1,6})\.m4s$/.exec(req.params.file);
-      const index = match ? Number(match[1]) : -1;
-      if (index < 0 || index >= session.timeline.length) throw notFound('Segment');
-      return sendFile(reply, CONTENT_TYPES.m4s, await session.getSegment(index));
-    },
-  );
+  }
 
   const subtitleFor = (session: PlaybackSession, slug: string) => {
     const track = session.subtitles.find((s) => s.slug === slug);

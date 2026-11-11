@@ -70,11 +70,36 @@ together exactly.
 Cost on this machine (4 vCPU): one 6 s 4K HEVC segment by copy **95 ms** wall;
 the same 6 s transcoded to 1080p H.264 **4.3 s** wall with all cores busy.
 
-## 5. Not covered yet
+## 5. M2b — copy video + separate audio rendition
 
-- Sources whose audio is not AAC-LC (AC-3/E-AC-3/DTS/multichannel) still fall back
-  to a full transcode (`AUDIO_BLOCKS_COPY`). Next slice: copy video + a separate
-  transcoded audio rendition (`EXT-X-MEDIA TYPE=AUDIO`).
+Sources whose audio Safari/MSE cannot play (AC-3, E-AC-3, DTS, multichannel)
+keep their video copied; only the audio is transcoded, to AAC-LC stereo, as a
+separate HLS rendition (`EXT-X-MEDIA TYPE=AUDIO`, `AUDIO="aud"` on the variant,
+`NAME` = language endonym, `LANGUAGE`, `CHANNELS="2"`). Video segments then
+carry no audio.
+
+- The audio job cuts on time (`hls_time = d`; every AAC frame is a cut point)
+  in raw container time like copied video. Measured: a job restarted at 24 s
+  produced segments 4–6 with the same first/last timestamps and packet counts
+  as a continuous job (282/281/188) and a byte-identical init segment.
+- Defect found and fixed: a time-cut producer writes the title's final
+  fraction of a second as an extra segment beyond the playlist (the shared
+  timeline merges tails shorter than 1 s, which is right for video). The last
+  listed segment is now only served after the producer exits, with overflow
+  fragments appended to it. The e2e test compares the served audio's end with
+  the source and was shown to fail without the fix.
+
+Evidence (`copy.e2e.test.ts`, 720p H.264 + AC-3 5.1 English MKV): decisions
+`COPY` + `AUDIO_SEPARATE_RENDITION`; master declares the English AAC rendition;
+video segments contain only video, packet-exact; audio segments fetched with a
+seek first are AAC-LC 2 ch 48 kHz, strictly increasing timestamps, no gap above
+one AAC frame across the restart boundary, ending with the source; Chromium +
+hls.js plays and seeks with the alternate rendition.
+
+## 6. Not covered yet
+
+- Multiple audio languages (the planner picks one stream); AC-3/E-AC-3 5.1
+  passthrough renditions for Apple devices.
 - HEVC/4K playback on a real Safari/Apple device (Chromium cannot decode HEVC).
   HDR sources are copied with `VIDEO-RANGE=PQ|HLG` in the master playlist
   (unit-tested), but no HDR source has been played on HDR hardware yet.

@@ -56,7 +56,8 @@ Redis outage → `/readyz` 503, back to ready within ~1 s after recovery.
   per-segment stream copy; exact `avcC`/`hvcC` codec strings; HEVC as `hvc1`;
   `VIDEO-RANGE` for HDR. Evidence: [docs/feasibility/M2-copy-mode.md](docs/feasibility/M2-copy-mode.md).
 - ✅ 4K passthrough when source and client allow it (4K HEVC Main 10 e2e).
-- ⏳ Copy video + separate transcoded audio rendition (AC-3/DTS/5.1 sources).
+- ✅ Copy video + separate transcoded AAC audio rendition for AC-3/E-AC-3/DTS/5.1 sources
+  (M2b, same report §5).
 - Audio: stream selection by language; AAC passthrough; AC-3/E-AC-3
   passthrough rendition for Apple devices.
 - Embedded text subtitles (progressive extraction); HDR → SDR tone mapping.

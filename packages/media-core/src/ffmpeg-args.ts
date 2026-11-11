@@ -213,3 +213,76 @@ export function segmentDurationsFromPlaylist(playlist: string): Map<number, numb
   for (const m of playlist.matchAll(re)) out.set(Number(m[2]), Number(m[1]));
   return out;
 }
+
+export interface AudioTranscodeJobSpec {
+  inputUrl: string;
+  audioStreamIndex: number;
+  startSegment: number;
+  segmentDurationSec: number;
+  /** Directory receiving `seg-<n>.m4s` for the audio rendition. */
+  mediaDir: string;
+  jobPlaylistPath: string;
+  initFileName: string;
+  readTimeoutSec: number;
+}
+
+/**
+ * Audio-only AAC-LC stereo rendition on a fixed grid, alongside copied video.
+ *
+ * Every AAC frame is a valid cut point, so the HLS muxer splits on time:
+ * hls_time = d (not d/2 as for video). With `-ss k*d` and the container's raw
+ * timestamps (no -start_at_zero, matching copy-mode video), a job restarted at
+ * segment k produces the same segments as a continuous job, and init segments
+ * are byte-identical (validated in docs/feasibility/M2-copy-mode.md).
+ */
+export function buildAudioTranscodeArgs(spec: AudioTranscodeJobSpec): string[] {
+  const startSec = spec.startSegment * spec.segmentDurationSec;
+  const args = [
+    '-hide_banner',
+    '-nostdin',
+    '-loglevel',
+    'warning',
+    '-rw_timeout',
+    String(spec.readTimeoutSec * 1_000_000),
+  ];
+  if (startSec > 0) args.push('-ss', startSec.toFixed(3));
+  args.push(
+    '-i',
+    spec.inputUrl,
+    '-map',
+    `0:${spec.audioStreamIndex}`,
+    '-copyts',
+    '-avoid_negative_ts',
+    'disabled',
+    '-c:a',
+    'aac',
+    '-b:a',
+    String(AUDIO_BITRATE),
+    '-ac',
+    '2',
+    '-ar',
+    '48000',
+    '-f',
+    'hls',
+    '-hls_time',
+    String(spec.segmentDurationSec),
+    '-hls_segment_type',
+    'fmp4',
+    '-hls_segment_options',
+    'movflags=+frag_discont',
+    '-hls_flags',
+    'temp_file',
+    '-hls_playlist_type',
+    'event',
+    '-hls_list_size',
+    '0',
+    '-start_number',
+    String(spec.startSegment),
+    '-hls_fmp4_init_filename',
+    spec.initFileName,
+    '-hls_segment_filename',
+    `${spec.mediaDir}/seg-%d.m4s`,
+    spec.jobPlaylistPath,
+  );
+  return args;
+}

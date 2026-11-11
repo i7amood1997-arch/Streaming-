@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAudioTranscodeArgs,
   buildTranscodeArgs,
   completedSegmentsFromPlaylist,
   planPlayback,
@@ -119,6 +120,36 @@ describe('buildTranscodeArgs', () => {
       readTimeoutSec: 1,
     };
   }
+});
+
+describe('buildAudioTranscodeArgs', () => {
+  const args = buildAudioTranscodeArgs({
+    inputUrl: 'u',
+    audioStreamIndex: 2,
+    startSegment: 4,
+    segmentDurationSec: 6,
+    mediaDir: '/a',
+    jobPlaylistPath: '/j.m3u8',
+    initFileName: 'a1-init.mp4',
+    readTimeoutSec: 1,
+  });
+  const after = (flag: string) => args[args.indexOf(flag) + 1];
+
+  it('seeks on the grid in raw container time and cuts on time', () => {
+    expect(after('-ss')).toBe('24.000');
+    expect(args).not.toContain('-start_at_zero');
+    expect(after('-hls_time')).toBe('6');
+    expect(after('-map')).toBe('0:2');
+    expect(args).not.toContain('-vn');
+  });
+
+  it('encodes AAC-LC stereo 48 kHz into fMP4 with identical init segments', () => {
+    expect(after('-c:a')).toBe('aac');
+    expect(after('-ac')).toBe('2');
+    expect(after('-ar')).toBe('48000');
+    expect(after('-hls_segment_options')).toBe('movflags=+frag_discont');
+    expect(after('-hls_segment_filename')).toBe('/a/seg-%d.m4s');
+  });
 });
 
 describe('completedSegmentsFromPlaylist', () => {

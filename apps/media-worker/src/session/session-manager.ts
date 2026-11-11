@@ -7,6 +7,7 @@ import { capacityExceeded, notFound, sourceUnavailable } from '../errors.js';
 import {
   AUDIO_BITRATE,
   UnsupportedSourceError,
+  buildAudioTranscodeArgs,
   buildTranscodeArgs,
   copySegmentTimeline,
   decodeSubtitleBytes,
@@ -149,7 +150,12 @@ export class SessionManager {
       const jobsDir = path.join(dir, 'jobs');
       const mediaDir = path.join(dir, 'media');
       const video = plan.video;
-      const audioIndex = plan.audio?.streamIndex ?? null;
+      const audioPlan = plan.audio;
+      const separateAudio = audioPlan?.delivery === 'separate' ? audioPlan : null;
+      // Muxed audio travels in the video segments; separate audio has its own track.
+      const muxedAudioIndex = audioPlan && !separateAudio ? audioPlan.streamIndex : null;
+      const audioDir = path.join(dir, 'audio');
+      if (separateAudio) await mkdir(audioDir, { recursive: true });
       const subtitles = await prepareSidecarSubtitles(handle, path.join(dir, 'subs'));
 
       const acquired = handle;
@@ -160,50 +166,79 @@ export class SessionManager {
           dir,
           info,
           plan,
-          timeline,
           subtitles,
-          initialSegment: segmentIndexAt(timeline, req.startPositionSec),
-          usesTranscodeSlot: video.action === 'transcode',
-          createProducer: (startSegment, jobId, hooks) => {
-            if (video.action === 'copy' && copyTimeline) {
-              return new CopySegmentProducer({
-                id: jobId,
+          startPositionSec: req.startPositionSec,
+          audio: separateAudio
+            ? {
+                timeline: segmentTimeline(info.durationSec, config.segmentDurationSec),
+                usesTranscodeSlot: false,
+                createProducer: (startSegment, jobId) => {
+                  const playlistPath = path.join(jobsDir, `${jobId}.m3u8`);
+                  const initFileName = `${jobId}-init.mp4`;
+                  return new TranscodeJob(
+                    jobId,
+                    startSegment,
+                    config.ffmpegPath,
+                    buildAudioTranscodeArgs({
+                      inputUrl,
+                      audioStreamIndex: separateAudio.streamIndex,
+                      startSegment,
+                      segmentDurationSec: config.segmentDurationSec,
+                      mediaDir: audioDir,
+                      jobPlaylistPath: playlistPath,
+                      initFileName,
+                      readTimeoutSec: config.sourceReadTimeoutSec,
+                    }),
+                    playlistPath,
+                    path.join(jobsDir, initFileName),
+                  );
+                },
+              }
+            : null,
+          video: {
+            timeline,
+            usesTranscodeSlot: video.action === 'transcode',
+            createProducer: (startSegment, jobId, hooks) => {
+              if (video.action === 'copy' && copyTimeline) {
+                return new CopySegmentProducer({
+                  id: jobId,
+                  startSegment,
+                  segments: copyTimeline.segments,
+                  ffmpegPath: config.ffmpegPath,
+                  inputUrl,
+                  videoStreamIndex: info.video.index,
+                  audioStreamIndex: muxedAudioIndex,
+                  hvc1: video.hvc1,
+                  jobsDir,
+                  mediaDir,
+                  readTimeoutSec: config.sourceReadTimeoutSec,
+                  onDrift: hooks.onDrift,
+                });
+              }
+              const playlistPath = path.join(jobsDir, `${jobId}.m3u8`);
+              const initFileName = `${jobId}-init.mp4`;
+              return new TranscodeJob(
+                jobId,
                 startSegment,
-                segments: copyTimeline.segments,
-                ffmpegPath: config.ffmpegPath,
-                inputUrl,
-                videoStreamIndex: info.video.index,
-                audioStreamIndex: audioIndex,
-                hvc1: video.hvc1,
-                jobsDir,
-                mediaDir,
-                readTimeoutSec: config.sourceReadTimeoutSec,
-                onDrift: hooks.onDrift,
-              });
-            }
-            const playlistPath = path.join(jobsDir, `${jobId}.m3u8`);
-            const initFileName = `${jobId}-init.mp4`;
-            return new TranscodeJob(
-              jobId,
-              startSegment,
-              config.ffmpegPath,
-              buildTranscodeArgs({
-                inputUrl,
-                videoStreamIndex: info.video.index,
-                plan,
-                startSegment,
-                segmentDurationSec: config.segmentDurationSec,
-                segmentStartTimes: timeline.slice(startSegment).map((t) => t.startSec),
-                mediaDir,
-                jobPlaylistPath: playlistPath,
-                initFileName,
-                threads: config.ffmpegThreads,
-                preset: config.x264Preset,
-                readTimeoutSec: config.sourceReadTimeoutSec,
-              }),
-              playlistPath,
-              path.join(jobsDir, initFileName),
-            );
+                config.ffmpegPath,
+                buildTranscodeArgs({
+                  inputUrl,
+                  videoStreamIndex: info.video.index,
+                  plan,
+                  startSegment,
+                  segmentDurationSec: config.segmentDurationSec,
+                  segmentStartTimes: timeline.slice(startSegment).map((t) => t.startSec),
+                  mediaDir,
+                  jobPlaylistPath: playlistPath,
+                  initFileName,
+                  threads: config.ffmpegThreads,
+                  preset: config.x264Preset,
+                  readTimeoutSec: config.sourceReadTimeoutSec,
+                }),
+                playlistPath,
+                path.join(jobsDir, initFileName),
+              );
+            },
           },
           // Valid for the title's duration plus generous headroom for pauses.
           expiresAtSec: Math.floor(Date.now() / 1000 + info.durationSec + 4 * 3600),
@@ -253,13 +288,6 @@ export class SessionManager {
       }
     }
   }
-}
-
-/** Index of the segment containing `sec` (resume position). */
-export function segmentIndexAt(timeline: readonly SegmentTiming[], sec: number): number {
-  let found = 0;
-  for (const seg of timeline) if (seg.startSec <= sec) found = seg.index;
-  return found;
 }
 
 /**

@@ -214,10 +214,33 @@ describe('planPlayback copy mode', () => {
     expect(plan.reasons.map((r) => r.code)).toEqual(
       expect.arrayContaining([
         'VIDEO_TRANSCODE_REQUIRED',
-        'AUDIO_BLOCKS_COPY',
+        'AUDIO_TRANSCODE_REQUIRED',
         'CLIENT_RESOLUTION_LIMIT',
       ]),
     );
+  });
+
+  it('copies video and delivers non-AAC audio as a separate AAC rendition', () => {
+    const plan = planPlayback(
+      media({}, [{ codec: 'ac3', profile: undefined, channels: 6, language: 'eng' }]),
+      { quality: 'auto', caps, copySource: h264Copy },
+    );
+    expect(plan.video.action).toBe('copy');
+    expect(plan.audio).toEqual({
+      action: 'transcode',
+      delivery: 'separate',
+      streamIndex: 1,
+      channels: 2,
+      codecString: 'mp4a.40.2',
+      language: 'eng',
+    });
+    expect(plan.reasons.map((r) => r.code)).toEqual(['COPY', 'AUDIO_SEPARATE_RENDITION']);
+    expect(plan.bandwidth).toBe(Math.ceil(((6_000_000 + 160_000) * 11) / 10));
+  });
+
+  it('keeps AAC audio muxed when copying', () => {
+    const plan = planPlayback(media(), { quality: 'auto', caps, copySource: h264Copy });
+    expect(plan.audio).toMatchObject({ action: 'copy', delivery: 'muxed' });
   });
 
   it('transcodes when the viewer asks for less than the source', () => {

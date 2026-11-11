@@ -73,6 +73,10 @@ These docs must match the code. Update them in the same change:
   `-c copy` run seeking to `boundary + 0.2 s` **without** `-start_at_zero`,
   cut by the HLS muxer (`hls_time` just under the segment length), never by
   `-to`. HEVC is written as `hvc1`. `driftEvents` must stay 0 in tests.
+- Separate audio rendition (copied video, non-AAC source audio): AAC-LC stereo,
+  `hls_time = d`, raw container time (no `-start_at_zero`). A track's last
+  listed segment is served only after its producer exits, with any overflow
+  segments appended.
 
 ## Code conventions
 

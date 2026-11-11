@@ -102,6 +102,25 @@ describe('buildMasterPlaylist', () => {
     );
   });
 
+  it('declares a separate audio rendition and links it from the variant', () => {
+    const text = buildMasterPlaylist(
+      {
+        bandwidth: 1,
+        codecs: ['avc1.640028', 'mp4a.40.2'],
+        width: 1920,
+        height: 1080,
+        frameRate: 24,
+        uri: 'video/index.m3u8',
+        audio: { name: 'English', language: 'en', channels: 2, uri: 'audio/index.m3u8' },
+      },
+      [],
+    );
+    expect(text).toContain(
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="English",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,CHANNELS="2",URI="audio/index.m3u8"',
+    );
+    expect(text).toMatch(/#EXT-X-STREAM-INF:.*,AUDIO="aud"/);
+  });
+
   it('signals HDR video range and omits it for SDR', () => {
     const v = {
       bandwidth: 1,

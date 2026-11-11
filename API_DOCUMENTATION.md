@@ -128,7 +128,7 @@ Response `201`:
 `masterPlaylistUrl` is absolute when `PUBLIC_BASE_URL` is set, otherwise
 relative to the API origin. `decisions` explain every non-obvious choice
 (codes: `COPY` (stream copy, no re-encoding), `COPY_INDEX_UNAVAILABLE`, `COPY_INDEX_ERROR`,
-`COPY_INDEX_MISMATCH`, `AUDIO_BLOCKS_COPY`, `DOWNSCALE_REQUESTED`, `CLIENT_RESOLUTION_LIMIT`,
+`COPY_INDEX_MISMATCH`, `AUDIO_SEPARATE_RENDITION`, `DOWNSCALE_REQUESTED`, `CLIENT_RESOLUTION_LIMIT`,
 `VIDEO_TRANSCODE_REQUIRED`, `AUDIO_TRANSCODE_REQUIRED`, `QUALITY_CAPPED`, `UHD_REQUIRES_PASSTHROUGH`,
 `HDR_TONEMAP_MISSING`, `NO_AUDIO`). With `quality: "auto"` a Safari-compatible source is
 streamed by copy at its own resolution (up to 4K for HEVC-capable clients).
@@ -149,14 +149,15 @@ All under the capability prefix `/v1/hls/:sessionId/:token/`, where `token`
 is `<expiryUnixSec>.<HMAC-SHA256>` bound to the session. Players only ever
 follow relative URIs from `master.m3u8`.
 
-| Path                        | Content-Type                    | Notes                                                                                     |
-| --------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------- |
-| `master.m3u8`               | `application/vnd.apple.mpegurl` | One variant (+ `SUBTITLES` group)                                                         |
-| `video/index.m3u8`          | same                            | Complete VOD playlist, 6 s segments, `EXT-X-MAP`                                          |
-| `video/init.mp4`            | `video/mp4`                     | Canonical fMP4 init segment (waits for the first encode)                                  |
-| `video/seg-<n>.m4s`         | `video/iso.segment`             | Produced on demand; may wait up to `SEGMENT_WAIT_TIMEOUT_SEC`, else `503` + `Retry-After` |
-| `subs/<lang>/index.m3u8`    | `application/vnd.apple.mpegurl` | Single-segment WebVTT playlist                                                            |
-| `subs/<lang>/subtitles.vtt` | `text/vtt; charset=utf-8`       | Normalised UTF-8 WebVTT with `X-TIMESTAMP-MAP`                                            |
+| Path                                                      | Content-Type                    | Notes                                                                                     |
+| --------------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------- |
+| `master.m3u8`                                             | `application/vnd.apple.mpegurl` | One variant (+ `SUBTITLES` group)                                                         |
+| `video/index.m3u8`                                        | same                            | Complete VOD playlist, 6 s segments, `EXT-X-MAP`                                          |
+| `video/init.mp4`                                          | `video/mp4`                     | Canonical fMP4 init segment (waits for the first encode)                                  |
+| `video/seg-<n>.m4s`                                       | `video/iso.segment`             | Produced on demand; may wait up to `SEGMENT_WAIT_TIMEOUT_SEC`, else `503` + `Retry-After` |
+| `audio/index.m3u8`, `audio/init.mp4`, `audio/seg-<n>.m4s` | as above                        | Only when audio is a separate rendition (`AUDIO_SEPARATE_RENDITION`): AAC-LC stereo       |
+| `subs/<lang>/index.m3u8`                                  | `application/vnd.apple.mpegurl` | Single-segment WebVTT playlist                                                            |
+| `subs/<lang>/subtitles.vtt`                               | `text/vtt; charset=utf-8`       | Normalised UTF-8 WebVTT with `X-TIMESTAMP-MAP`                                            |
 
 Caching: playlists `private, no-cache`; segments and subtitles
 `private, max-age=3600, immutable`. CORS: only origins listed in `ALLOWED_ORIGINS`.

@@ -132,7 +132,8 @@ On-demand real-time ABR would require one encoder per rung per viewer
 - **M0–M2:** one rendition per session, chosen from the source height, the
   client's capabilities and the viewer's quality choice. "Quality" switching
   creates a new session at the current position (≈1–2 s rebuffer).
-- **M2:** for Safari-compatible sources, the copy (remux) rendition is free;
+- **M2 ✅:** Safari-compatible video is copied (remuxed); non-AAC audio becomes a separate
+  AAC rendition so it never forces a video transcode. Still planned:
   offer _copy_ + one transcoded lower rung (e.g. 720p) so the native player
   can switch down on poor networks.
 - **M8:** pre-package frequently watched titles into a full ladder

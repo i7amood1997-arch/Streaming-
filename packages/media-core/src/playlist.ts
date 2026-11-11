@@ -83,6 +83,16 @@ export interface MasterVariant {
   uri: string;
   /** Omitted means SDR. Required for HDR (PQ/HLG) so Apple players handle it correctly. */
   videoRange?: 'SDR' | 'PQ' | 'HLG';
+  /** Separate audio rendition; omit when audio is muxed into the video segments. */
+  audio?: MasterAudio;
+}
+
+export interface MasterAudio {
+  name: string;
+  /** BCP 47 / ISO 639 tag, when the source declares one. */
+  language: string | undefined;
+  channels: number;
+  uri: string;
 }
 
 export interface MasterSubtitle {
@@ -101,6 +111,21 @@ function quoted(value: string): string {
 
 export function buildMasterPlaylist(variant: MasterVariant, subtitles: MasterSubtitle[]): string {
   const lines = ['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-INDEPENDENT-SEGMENTS'];
+  if (variant.audio) {
+    const a = variant.audio;
+    lines.push(
+      [
+        '#EXT-X-MEDIA:TYPE=AUDIO',
+        'GROUP-ID="aud"',
+        `NAME=${quoted(a.name)}`,
+        ...(a.language ? [`LANGUAGE=${quoted(a.language)}`] : []),
+        'DEFAULT=YES',
+        'AUTOSELECT=YES',
+        `CHANNELS=${quoted(String(a.channels))}`,
+        `URI=${quoted(a.uri)}`,
+      ].join(','),
+    );
+  }
   for (const s of subtitles) {
     lines.push(
       [
@@ -125,6 +150,7 @@ export function buildMasterPlaylist(variant: MasterVariant, subtitles: MasterSub
       : []),
     'CLOSED-CAPTIONS=NONE',
   ];
+  if (variant.audio) attrs.push('AUDIO="aud"');
   if (subtitles.length > 0) attrs.push('SUBTITLES="subs"');
   lines.push(`#EXT-X-STREAM-INF:${attrs.join(',')}`, variant.uri, '');
   return lines.join('\n');

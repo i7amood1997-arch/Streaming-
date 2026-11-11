@@ -1,12 +1,11 @@
-import { copyFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import type { MediaInfo, PlaybackPlan, SegmentTiming } from '@streaming/media-core';
 import type { Config } from '../config.js';
-import { segmentNotReady, transcodeFailed } from '../errors.js';
-import type { PlaybackPlan } from '@streaming/media-core';
-import type { SegmentTiming } from '@streaming/media-core';
-import type { MediaInfo } from '@streaming/media-core';
 import type { Semaphore } from './semaphore.js';
-import type { JobExit, SegmentProducer } from './transcode-job.js';
+import { TrackPipeline } from './track-pipeline.js';
+import type { TrackInit, TrackKind, TrackStats } from './track-pipeline.js';
+
+export type { ProducerHooks, TrackKind } from './track-pipeline.js';
 
 export interface SubtitleTrack {
   /** URL-safe identifier, e.g. `ar` or `en-forced`. */
@@ -20,320 +19,119 @@ export interface SubtitleTrack {
   path: string;
 }
 
+type TrackSpec = Omit<TrackInit, 'kind' | 'mediaDir' | 'initialSegment'>;
+
 export interface SessionInit {
   id: string;
   contentId: string;
   dir: string;
   info: MediaInfo;
   plan: PlaybackPlan;
-  timeline: SegmentTiming[];
   subtitles: SubtitleTrack[];
   expiresAtSec: number;
-  /** Segment the viewer starts at (resume position); the first encoder starts there. */
-  initialSegment: number;
+  /** Resume position; each track's first producer starts at the segment containing it. */
+  startPositionSec: number;
+  video: TrackSpec;
+  /** Present when audio is delivered as a separate HLS rendition (EXT-X-MEDIA TYPE=AUDIO). */
+  audio: TrackSpec | null;
   onDispose: () => Promise<void>;
-  /** Builds the producer for a (re)start at `startSegment`. */
-  createProducer: (startSegment: number, id: string, hooks: ProducerHooks) => SegmentProducer;
-  /** Transcoding is CPU-bound and limited by a worker-wide semaphore; copy is not. */
-  usesTranscodeSlot: boolean;
 }
 
-export interface ProducerHooks {
-  onDrift: (index: number, plannedSec: number, actualSec: number) => void;
-}
+/** Video-track stats at the top level (the common case), audio track stats nested. */
+export type SessionStats = TrackStats & { audio: TrackStats | null };
 
-const MAX_CONSECUTIVE_FAILURES = 3;
-
-interface Waiter {
-  resolve: () => void;
-  reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
-}
-
-export interface SessionStats {
-  jobsStarted: number;
-  seekRestarts: number;
-  segmentsServed: number;
-  pauses: number;
-  /** Copy mode: segments whose actual length differed from the planned one. */
-  driftEvents: number;
-  completedSegments: number;
-  job: { id: string; startSegment: number; head: number; state: string } | null;
+/** Index of the segment containing `sec`. */
+export function segmentIndexAt(timeline: readonly SegmentTiming[], sec: number): number {
+  let found = 0;
+  for (const seg of timeline) if (seg.startSec <= sec) found = seg.index;
+  return found;
 }
 
 /**
- * A viewer's playback of one title at one rendition. Owns the on-demand
- * transcoder: segments are produced ahead of the playhead, the encoder is
- * paused when too far ahead (SIGSTOP), and restarted at the requested segment
- * when the viewer seeks outside the range being produced.
+ * A viewer's playback of one title at one rendition: a video track (with
+ * muxed audio unless audio is a separate rendition), an optional audio
+ * track, and subtitles. Owns the session's lifetime and working directory.
  */
 export class PlaybackSession {
   readonly id: string;
   readonly contentId: string;
   readonly info: MediaInfo;
   readonly plan: PlaybackPlan;
-  readonly timeline: SegmentTiming[];
   readonly subtitles: SubtitleTrack[];
   readonly expiresAtSec: number;
   readonly createdAt = Date.now();
+  readonly video: TrackPipeline;
+  readonly audio: TrackPipeline | null;
   lastAccessMs = Date.now();
 
-  private readonly mediaDir: string;
-  private readonly jobsDir: string;
-  private readonly createProducer: SessionInit['createProducer'];
-  private readonly usesTranscodeSlot: boolean;
   private readonly onDispose: () => Promise<void>;
-  private readonly completed = new Set<number>();
-  private readonly waiters = new Map<number, Set<Waiter>>();
-  private job: SegmentProducer | null = null;
-  private releaseSlot: (() => void) | null = null;
-  private jobSeq = 0;
-  private lastRequested = 0;
-  private initReady = false;
-  private initWaiters = new Set<Waiter>();
-  private starting: Promise<void> | null = null;
   private disposed = false;
-  private consecutiveFailures = 0;
-  private readonly stats_ = {
-    jobsStarted: 0,
-    seekRestarts: 0,
-    segmentsServed: 0,
-    pauses: 0,
-    driftEvents: 0,
-  };
 
-  constructor(
-    init: SessionInit,
-    private readonly config: Config,
-    private readonly transcodeSlots: Semaphore,
-  ) {
+  constructor(init: SessionInit, config: Config, transcodeSlots: Semaphore) {
     this.id = init.id;
     this.contentId = init.contentId;
     this.info = init.info;
     this.plan = init.plan;
-    this.timeline = init.timeline;
     this.subtitles = init.subtitles;
     this.expiresAtSec = init.expiresAtSec;
-    this.createProducer = init.createProducer;
-    this.usesTranscodeSlot = init.usesTranscodeSlot;
     this.onDispose = init.onDispose;
-    this.lastRequested = Math.min(Math.max(0, init.initialSegment), init.timeline.length - 1);
-    this.mediaDir = path.join(init.dir, 'media');
-    this.jobsDir = path.join(init.dir, 'jobs');
+    const track = (kind: TrackKind, spec: TrackSpec) =>
+      new TrackPipeline(
+        {
+          ...spec,
+          kind,
+          mediaDir: path.join(init.dir, kind === 'video' ? 'media' : 'audio'),
+          initialSegment: segmentIndexAt(spec.timeline, init.startPositionSec),
+        },
+        config,
+        transcodeSlots,
+      );
+    this.video = track('video', init.video);
+    this.audio = init.audio ? track('audio', init.audio) : null;
+  }
+
+  /** Video segment timeline (what video/index.m3u8 describes). */
+  get timeline(): SegmentTiming[] {
+    return this.video.timeline;
   }
 
   touch(): void {
     this.lastAccessMs = Date.now();
   }
 
+  track(kind: TrackKind): TrackPipeline | null {
+    return kind === 'video' ? this.video : this.audio;
+  }
+
   get stats(): SessionStats {
-    return {
-      ...this.stats_,
-      completedSegments: this.completed.size,
-      job: this.job
-        ? {
-            id: this.job.id,
-            startSegment: this.job.startSegment,
-            head: this.job.head,
-            state: this.job.state,
-          }
-        : null,
-    };
+    return { ...this.video.stats, audio: this.audio?.stats ?? null };
   }
 
-  get initPath(): string {
-    return path.join(this.mediaDir, 'init.mp4');
-  }
-
-  segmentPath(index: number): string {
-    return path.join(this.mediaDir, `seg-${index}.m4s`);
-  }
-
-  async getInit(): Promise<string> {
+  getInit(): Promise<string> {
     this.touch();
-    if (this.initReady) return this.initPath;
-    await this.ensureJobFor(this.lastRequested);
-    await this.wait(this.initWaiters, () => this.initReady, -1);
-    return this.initPath;
+    return this.video.getInit();
   }
 
-  async getSegment(index: number): Promise<string> {
+  getSegment(index: number): Promise<string> {
     this.touch();
-    this.lastRequested = index;
-    if (this.completed.has(index)) {
-      this.applyThrottle();
-      this.stats_.segmentsServed += 1;
-      return this.segmentPath(index);
-    }
-    await this.ensureJobFor(index);
-    let set = this.waiters.get(index);
-    if (!set) {
-      set = new Set();
-      this.waiters.set(index, set);
-    }
-    await this.wait(set, () => this.completed.has(index), index);
-    this.stats_.segmentsServed += 1;
-    return this.segmentPath(index);
+    return this.video.getSegment(index);
   }
 
-  /** Stops the encoder (e.g. viewer paused for a long time); segments stay on disk. */
+  /** Stops all producers (e.g. viewer paused for a long time); segments stay on disk. */
   stopJob(): void {
-    this.job?.stop();
-    this.freeSlot();
+    this.video.stopJob();
+    this.audio?.stopJob();
   }
 
   get hasActiveJob(): boolean {
-    return this.job?.alive === true;
+    return this.video.hasActiveJob || this.audio?.hasActiveJob === true;
   }
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    this.stopJob();
-    const err = new Error('Session closed');
-    for (const set of [...this.waiters.values(), this.initWaiters]) {
-      for (const w of set) {
-        clearTimeout(w.timer);
-        w.reject(err);
-      }
-    }
-    this.waiters.clear();
-    this.initWaiters.clear();
+    this.video.dispose();
+    this.audio?.dispose();
     await this.onDispose();
-  }
-
-  private wait(set: Set<Waiter>, done: () => boolean, index: number): Promise<void> {
-    if (done()) return Promise.resolve();
-    return new Promise<void>((resolve, reject) => {
-      const waiter: Waiter = {
-        resolve,
-        reject,
-        timer: setTimeout(() => {
-          set.delete(waiter);
-          reject(segmentNotReady(index));
-        }, this.config.segmentWaitTimeoutSec * 1000),
-      };
-      set.add(waiter);
-    });
-  }
-
-  private settle(set: Set<Waiter> | undefined, err?: Error): void {
-    if (!set) return;
-    for (const w of set) {
-      clearTimeout(w.timer);
-      if (err) w.reject(err);
-      else w.resolve();
-    }
-    set.clear();
-  }
-
-  /** Makes sure an encoder will produce `index` soon; restarts it on a seek. */
-  private async ensureJobFor(index: number): Promise<void> {
-    if (this.starting) await this.starting;
-    if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      throw transcodeFailed('encoder failed repeatedly for this session');
-    }
-    const job = this.job;
-    if (
-      job?.alive &&
-      index >= job.startSegment &&
-      index <= job.head + 1 + this.config.seekRestartThreshold
-    ) {
-      job.resume();
-      return;
-    }
-    if (job?.alive) this.stats_.seekRestarts += 1;
-    this.starting = this.startJob(index).finally(() => {
-      this.starting = null;
-    });
-    await this.starting;
-  }
-
-  private async startJob(startSegment: number): Promise<void> {
-    this.stopJob();
-    if (this.usesTranscodeSlot) {
-      this.releaseSlot = await this.transcodeSlots.acquire(
-        this.config.segmentWaitTimeoutSec * 1000,
-      );
-    }
-    if (this.disposed) {
-      this.freeSlot();
-      return;
-    }
-    const id = `j${++this.jobSeq}`;
-    const job = this.createProducer(startSegment, id, {
-      onDrift: () => {
-        this.stats_.driftEvents += 1;
-      },
-    });
-    job.on('segment', (index) => {
-      void this.onSegment(job, index, job.initPath);
-    });
-    job.on('exit', (exit) => {
-      this.onJobExit(job, exit);
-    });
-    this.job = job;
-    this.stats_.jobsStarted += 1;
-    job.start();
-  }
-
-  private async onSegment(job: SegmentProducer, index: number, jobInitPath: string): Promise<void> {
-    if (!this.initReady) {
-      // All jobs emit byte-identical init segments (movflags=+frag_discont),
-      // so the first one written becomes the session's canonical init.mp4.
-      try {
-        await stat(jobInitPath);
-        await copyFile(jobInitPath, this.initPath);
-        this.initReady = true;
-        this.settle(this.initWaiters);
-      } catch {
-        /* init not flushed yet; retried on next segment */
-      }
-    }
-    this.consecutiveFailures = 0;
-    this.completed.add(index);
-    this.settle(this.waiters.get(index));
-    this.waiters.delete(index);
-    if (job === this.job) this.applyThrottle();
-  }
-
-  private applyThrottle(): void {
-    const job = this.job;
-    if (!job?.alive) return;
-    const ahead = job.head - this.lastRequested;
-    if (job.state === 'running' && ahead > this.config.maxSegmentsAhead) {
-      job.pause();
-      this.stats_.pauses += 1;
-    } else if (job.state === 'paused' && ahead <= this.config.maxSegmentsAhead / 2) {
-      job.resume();
-    }
-  }
-
-  private onJobExit(job: SegmentProducer, exit: JobExit): void {
-    if (job !== this.job) return; // superseded by a seek restart
-    this.freeSlot();
-    if (exit.stoppedByUs) return;
-    if (exit.ok) {
-      // Encoder reached the end; anything still awaited will never be produced.
-      for (const [index, set] of this.waiters) {
-        if (!this.completed.has(index))
-          this.settle(set, transcodeFailed(`segment ${index} not produced`));
-      }
-      this.waiters.clear();
-      return;
-    }
-    this.consecutiveFailures += 1;
-    const err = transcodeFailed(
-      exit.stderrTail.split('\n').slice(-3).join(' | ') || `exit ${exit.code}`,
-    );
-    for (const set of this.waiters.values()) this.settle(set, err);
-    this.waiters.clear();
-    this.settle(this.initWaiters, err);
-    this.job = null;
-  }
-
-  private freeSlot(): void {
-    this.releaseSlot?.();
-    this.releaseSlot = null;
   }
 }
