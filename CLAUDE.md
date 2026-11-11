@@ -27,9 +27,15 @@ iPad, macOS, Windows). Build production-quality software, not prototypes.
 ## Quality gates (run before every commit)
 
 ```bash
-pnpm typecheck && pnpm lint && pnpm format:check && pnpm test
-pnpm test:e2e      # whenever media, torrent, session or HTTP code changes
+pnpm install --frozen-lockfile   # catches lockfile drift exactly like CI
+pnpm typecheck && pnpm lint && pnpm format:check && pnpm build && pnpm test
+pnpm test:integration   # API changes; needs TEST_DATABASE_URL / TEST_REDIS_URL
+pnpm test:e2e           # whenever media, torrent, session or HTTP code changes
 ```
+
+Never pipe gate commands into `head`/`tail`/`grep` when judging success: the
+pipeline's exit code is the last command's, which hides failures. Check each
+command's own exit status.
 
 UI milestones also need responsive checks at iPhone, iPad and desktop widths,
 in both LTR and RTL.

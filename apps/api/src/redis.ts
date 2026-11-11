@@ -1,7 +1,21 @@
 import { createClient } from 'redis';
 
+function connectClient(url: string) {
+  return createClient({
+    url,
+    disableOfflineQueue: true,
+    socket: {
+      connectTimeout: 5_000,
+      reconnectStrategy: (retries) => Math.min(100 * 2 ** retries, 10_000),
+    },
+  });
+}
+
+/** Concrete client type for our options (RESP3, default modules). */
+export type RedisClient = ReturnType<typeof connectClient>;
+
 export interface RedisHandle {
-  client: ReturnType<typeof createClient>;
+  client: RedisClient;
   ping: () => Promise<void>;
   close: () => Promise<void>;
 }
@@ -12,14 +26,7 @@ export interface RedisHandle {
  * instead of queueing while disconnected.
  */
 export function createRedis(url: string, onError: (err: Error) => void): RedisHandle {
-  const client = createClient({
-    url,
-    disableOfflineQueue: true,
-    socket: {
-      connectTimeout: 5_000,
-      reconnectStrategy: (retries) => Math.min(100 * 2 ** retries, 10_000),
-    },
-  });
+  const client = connectClient(url);
   client.on('error', onError);
   client.connect().catch(onError);
   return {

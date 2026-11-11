@@ -14,11 +14,29 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: streaming
+          POSTGRES_PASSWORD: streaming
+          POSTGRES_DB: streaming_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U streaming" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://streaming:streaming@localhost:5432/streaming_test
+      TEST_REDIS_URL: redis://localhost:6379
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -28,9 +46,29 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
+      - run: pnpm build
       - run: pnpm test
+      - run: pnpm test:integration
       - name: Install Chromium for Playwright
         run: pnpm --filter @streaming/media-worker exec playwright install --with-deps chromium
       - run: pnpm test:e2e
       - name: Dependency audit (report only until advisories are triaged)
         run: pnpm audit --prod || true
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      matrix:
+        target: [api, media-worker]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.target }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile
+          target: ${{ matrix.target }}
+          push: false
+          tags: streaming/${{ matrix.target }}:ci

@@ -1,9 +1,13 @@
 # API documentation
 
-Two groups of endpoints exist:
+Two services expose HTTP today:
 
-- **Implemented (M0 spike)** — served by `spikes/m0-pipeline`, covered by tests.
-- **Planned** — proposed contracts for later milestones; not implemented.
+- **API service** (`apps/api`, default port 3000): implemented endpoints below.
+- **Media worker** (`apps/media-worker`, default port 8080): implemented endpoints below.
+- **Planned** endpoints are listed at the end; they are not implemented.
+
+Schemas live in `packages/contracts` and are the source of truth; the API
+publishes them as OpenAPI 3.1 at `GET /openapi.json`.
 
 All JSON errors use one shape:
 
@@ -28,7 +32,36 @@ All JSON errors use one shape:
 
 ---
 
-## Implemented (M0 spike)
+## API service (`apps/api`)
+
+### `GET /healthz`
+
+Liveness. Never touches dependencies. `200` →
+`{ "status": "ok", "service": "streaming-api", "version": "0.1.0" }`
+
+### `GET /readyz`
+
+Readiness. Probes PostgreSQL (`SELECT 1`) and Redis (`PING`), each with
+`READINESS_TIMEOUT_MS`. `200` when all succeed, `503` otherwise.
+`Cache-Control: no-store`.
+
+```json
+{
+  "status": "not_ready",
+  "checks": {
+    "database": { "ok": true, "latencyMs": 2 },
+    "redis": { "ok": false, "latencyMs": 0, "error": "not connected" }
+  }
+}
+```
+
+### `GET /openapi.json`
+
+OpenAPI 3.1 document generated from the Zod contracts.
+
+---
+
+## Media worker (`apps/media-worker`)
 
 > No user authentication yet (M3). The spike binds to `127.0.0.1` by default.
 

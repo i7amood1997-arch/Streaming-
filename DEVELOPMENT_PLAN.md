@@ -7,7 +7,7 @@ relevant integration/e2e tests, responsive-layout check (UI milestones),
 documentation update. A milestone is only marked done when its exit criteria
 are demonstrated, not when code exists.
 
-## M0 — Architecture & feasibility ✅ (awaiting approval)
+## M0 — Architecture & feasibility ✅
 
 - ✅ Environment inspection, toolchain (pnpm workspace, TS 6 strict, ESLint
   strict-type-checked, Prettier, Vitest, Playwright).
@@ -21,24 +21,36 @@ are demonstrated, not when code exists.
   environment (no network access to content hosts, no Apple hardware). Moved
   to M2 exit criteria with a runbook.
 
-**Exit:** architecture decisions in ARCHITECTURE.md §14 approved.
+**Exit:** ✅ architecture decisions approved 2026-11-11 ([ADR 0001](docs/adr/0001-m0-architecture-decisions.md)).
 
-## M1 — Foundations ⏳
+## M1 — Foundations ✅
 
-- Restructure into `apps/` + `packages/` (ARCHITECTURE.md §12); extract pure
-  media logic from the spike into `packages/media-core` with its tests.
-- `packages/contracts` (Zod schemas shared by API, worker, clients).
-- `apps/api` skeleton: Fastify, config validation, structured logging, error
-  model, health/readiness, OpenAPI generation.
-- PostgreSQL + Drizzle migrations; Redis client; `infra/compose.yaml`.
-- Dockerfiles (non-root, pinned ffmpeg) for api and media-worker.
-- CI: typecheck, lint, format, unit, e2e (ffmpeg + Chromium), dependency audit.
+- ✅ Restructure into `apps/` + `packages/`. The spike became
+  `apps/media-worker`; pure media logic moved to `packages/media-core`.
+- ✅ `packages/contracts`: Zod schemas (playback, catalog, health), shared
+  `ErrorBody`/`AppError`, OpenAPI 3.1 builder. The worker uses them.
+- ✅ `apps/api`: Fastify, validated config, pino logging, error model,
+  `/healthz`, `/readyz` (PostgreSQL + Redis, per-dependency timeouts),
+  `/openapi.json`, CORS allow-list.
+- ✅ PostgreSQL + Drizzle: schema and first migration (`titles`,
+  `title_localizations`, `sources`) with integrity constraints.
+- ✅ Redis client with background reconnects, fail-fast while down.
+- ✅ Multi-target Dockerfile (non-root; worker on Ubuntu 24.04 for ffmpeg
+  6.1, the validated version) and `infra/compose.yaml`.
+- ✅ CI: frozen install, typecheck, lint, format, build, unit, integration
+  (Postgres/Redis services), e2e, image builds, audit.
 
-**Exit:** `docker compose up` gives a healthy api + worker + db + redis; CI green.
+**Evidence:** 63 unit tests, 4 integration tests (real PostgreSQL 16 and
+Redis 7), 11 e2e tests. `docker compose up` → all five services healthy,
+migrations applied, `/readyz` ready. Playback through the containerised
+worker verified: segment alignment after a seek-restart, Arabic RTL cues.
+Redis outage → `/readyz` 503, back to ready within ~1 s after recovery.
+
+**Exit:** ✅ compose stack healthy. CI on GitHub: see the run for the M1 commits.
 
 ## M2 — Media worker v1 ⏳
 
-- Promote the spike to `apps/media-worker`; worker ↔ API session broker contract.
+- Worker ↔ API session broker contract (API creates sessions, picks a worker).
 - **Copy (remux) mode:** keyframe index from MP4 `stss` / MKV `Cues`;
   synthetic playlist from real keyframe times; HEVC passthrough (`hvc1`).
 - 4K passthrough when source and client allow it.

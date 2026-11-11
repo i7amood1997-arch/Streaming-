@@ -1,0 +1,82 @@
+# Local development stack: PostgreSQL, Redis, API (+ migrations) and the media worker.
+#   docker compose -f infra/compose.yaml up --build
+# Images are built from infra/docker/Dockerfile. Ports bind to localhost only.
+name: streaming
+
+x-build: &build
+  context: ..
+  dockerfile: infra/docker/Dockerfile
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: streaming
+      POSTGRES_PASSWORD: streaming # local development only
+      POSTGRES_DB: streaming
+    ports: ['127.0.0.1:5432:5432']
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U streaming -d streaming']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports: ['127.0.0.1:6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: { <<: *build, target: api }
+    image: streaming/api:dev
+    command: ['node', 'dist/db/migrate.js']
+    environment: &api-env
+      DATABASE_URL: postgres://streaming:streaming@postgres:5432/streaming
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: 'no'
+
+  api:
+    image: streaming/api:dev
+    environment: *api-env
+    ports: ['127.0.0.1:3000:3000']
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    read_only: true
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+
+  media-worker:
+    build: { <<: *build, target: media-worker }
+    image: streaming/media-worker:dev
+    environment:
+      # Authorized catalog: generate with `pnpm --filter @streaming/media-worker fixtures`.
+      CATALOG_DIR: /catalog
+      # Dev only: dial the host's `pnpm seed` peer; never enable private peers in deployments.
+      TORRENT_BOOTSTRAP_PEERS: host.docker.internal:51413
+      TORRENT_ALLOW_PRIVATE_PEERS: 'true'
+      TORRENT_DHT: 'false'
+      TORRENT_TRACKERS: 'false'
+      MIN_FREE_DISK_MIB: '512'
+    extra_hosts: ['host.docker.internal:host-gateway']
+    ports: ['127.0.0.1:8080:8080']
+    volumes:
+      - ../apps/media-worker/fixtures:/catalog:ro
+      - media-data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+
+volumes:
+  postgres-data:
+  media-data:

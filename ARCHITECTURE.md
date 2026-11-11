@@ -317,30 +317,36 @@ playback_sessions(id, profile_id, source_id, worker_id, started_at, ended_at)  -
 | Observability    | pino logs, OpenTelemetry traces, Prometheus metrics                 | —                                                                |
 | Deploy           | Docker images; Compose for dev; Kubernetes or Nomad for prod        | —                                                                |
 
-## 12. Proposed repository layout
+## 12. Repository layout
+
+✅ = exists (M1). Others arrive with their milestones.
 
 ```
 apps/
-  api/               Fastify API: auth, profiles, catalog, watchlist, progress, session broker
-  media-worker/      promoted from spikes/m0-pipeline: torrent engine, HLS origin, ffmpeg jobs
-  web/               React SPA (PWA) — shared by all shells
-  ios/               Capacitor project (generated, thin)
-  desktop/           Tauri project (thin)
+  api/            ✅ Fastify API: health/readiness, OpenAPI; later auth, profiles,
+                     catalog, watchlist, progress, session broker
+  media-worker/   ✅ torrent engine, HLS origin, ffmpeg jobs (promoted from the M0 spike)
+  web/               React SPA (PWA) — shared by all shells (M5)
+  ios/               Capacitor project (M7)
+  desktop/           Tauri project (M7)
 packages/
-  contracts/         Zod schemas + TS types shared by API, worker and clients
-  media-core/        pure media logic (planner, playlists, subtitles, RTL) — no I/O
-  player/            player engine abstraction (native HLS / hls.js), subtitle menu, quality
-  ui/                design system components
-  config/            eslint / tsconfig presets
+  contracts/      ✅ Zod schemas + types, ErrorBody/AppError, OpenAPI builder
+  media-core/     ✅ pure media logic (planner, playlists, ffmpeg args, subtitles, RTL, tokens)
+  player/            player engine abstraction (native HLS / hls.js) (M5)
+  ui/                design system components (M5)
 infra/
-  docker/            Dockerfiles (non-root, ffmpeg pinned)
-  compose.yaml       Postgres, Redis, api, media-worker for local dev
+  docker/         ✅ multi-target Dockerfile (api, media-worker), non-root
+  compose.yaml    ✅ PostgreSQL, Redis, migrate, api, media-worker
 docs/
-  adr/               one file per accepted decision
-  feasibility/       spike reports
-spikes/
-  m0-pipeline/       feasibility spike (deleted once promoted to apps/media-worker)
+  adr/            ✅ accepted decisions
+  feasibility/    ✅ spike reports
 ```
+
+Lint/TypeScript/Prettier presets stay at the repository root until a second
+consumer needs them packaged. Workspace packages export TypeScript sources
+under the `source` condition (tsx, Vitest, `tsc` via `customConditions`) and
+compiled `dist/` by default, so development needs no build step and
+production runs plain `node`.
 
 ## 13. External services, credentials and infrastructure
 
