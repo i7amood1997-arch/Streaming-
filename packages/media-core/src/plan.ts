@@ -50,7 +50,7 @@ export interface PlanReason {
   message: string;
 }
 
-export interface VideoPlan {
+export interface TranscodeVideoPlan {
   action: 'transcode';
   rendition: Rendition;
   outputWidth: number;
@@ -61,15 +61,56 @@ export interface VideoPlan {
   /** level_idc, e.g. 40 for level 4.0. */
   h264Level: number;
   codecString: string;
-  /** Source could be remuxed without re-encoding once copy mode exists. */
+  /** Source video itself is Safari-compatible (copy was possible codec-wise). */
   copyEligible: boolean;
 }
 
+/** Stream copy (remux) of the source video: no re-encoding, original quality. */
+export interface CopyVideoPlan {
+  action: 'copy';
+  codec: 'h264' | 'hevc';
+  /** Exact RFC 6381 string from the source's avcC/hvcC. */
+  codecString: string;
+  outputWidth: number;
+  outputHeight: number;
+  frameRate: number;
+  quality: Quality;
+  /** Write HEVC with the hvc1 sample entry (required by Apple players). */
+  hvc1: boolean;
+  /** HLS VIDEO-RANGE of the untouched source (PQ/HLG for HDR). */
+  videoRange: 'SDR' | 'PQ' | 'HLG';
+}
+
+export type VideoPlan = TranscodeVideoPlan | CopyVideoPlan;
+
 export interface AudioPlan {
-  action: 'transcode';
+  action: 'transcode' | 'copy';
   streamIndex: number;
-  channels: 2;
+  channels: 1 | 2;
   codecString: 'mp4a.40.2';
+}
+
+/** Facts about an indexed source that make stream copy possible. */
+export interface CopySource {
+  codec: 'h264' | 'hevc';
+  codecString: string;
+  /** Peak bitrate of the copied media (video + audio), bits/s. */
+  peakBitrate: number;
+}
+
+const QUALITY_RANK: Readonly<Record<Quality, number>> = {
+  '480p': 0,
+  '720p': 1,
+  '1080p': 2,
+  '2160p': 3,
+};
+
+/** Quality bucket a source height belongs to (for labelling copy renditions). */
+export function qualityForHeight(height: number): Quality {
+  if (height >= 1800) return '2160p';
+  if (height >= 900) return '1080p';
+  if (height >= 600) return '720p';
+  return '480p';
 }
 
 export interface PlaybackPlan {
@@ -163,7 +204,8 @@ export function selectRendition(
   if (requested === '2160p') {
     reasons.push({
       code: 'UHD_REQUIRES_PASSTHROUGH',
-      message: '2160p is only served by passthrough of a 4K source (not in M0); capped to 1080p.',
+      message:
+        '2160p is only served by passthrough of a Safari-compatible 4K source; transcoding is capped to 1080p.',
     });
     target = TRANSCODE_LADDER['1080p'];
   } else if (requested === 'auto') {
@@ -196,11 +238,97 @@ export function fitDimensions(
   return { width: even(srcW * scale), height: even(srcH * scale) };
 }
 
+function copyBlockers(
+  info: MediaInfo,
+  opts: { quality: Quality | 'auto'; caps: ClientCapabilities; copySource?: CopySource },
+  audioStream: AudioStreamInfo | undefined,
+): PlanReason[] {
+  const blockers: PlanReason[] = [];
+  if (!opts.copySource) {
+    blockers.push({
+      code: 'COPY_INDEX_UNAVAILABLE',
+      message:
+        'No keyframe index for this source (container not MP4/Matroska, fragmented, or no Cues).',
+    });
+  } else if (opts.copySource.codec !== info.video.codec) {
+    blockers.push({
+      code: 'COPY_INDEX_MISMATCH',
+      message: 'Index and probe disagree on the codec.',
+    });
+  }
+  if (!isSafariCompatibleVideo(info.video, opts.caps)) {
+    blockers.push({
+      code: 'VIDEO_TRANSCODE_REQUIRED',
+      message: `Source video ${info.video.codec}/${info.video.profile ?? '?'}/${info.video.pixFmt ?? '?'} is not decodable by this client.`,
+    });
+  }
+  if (audioStream && !isSafariCompatibleAudio(audioStream)) {
+    blockers.push({
+      code: 'AUDIO_BLOCKS_COPY',
+      message: `Audio ${audioStream.codec} ${audioStream.channels}ch needs transcoding; copy with a separate audio rendition is not implemented yet.`,
+    });
+  }
+  const sourceQuality = qualityForHeight(info.video.height);
+  if (opts.quality !== 'auto' && QUALITY_RANK[opts.quality] < QUALITY_RANK[sourceQuality]) {
+    blockers.push({
+      code: 'DOWNSCALE_REQUESTED',
+      message: `Requested ${opts.quality} is below the source's ${sourceQuality}.`,
+    });
+  }
+  if (info.video.height > opts.caps.maxHeight) {
+    blockers.push({
+      code: 'CLIENT_RESOLUTION_LIMIT',
+      message: `Source ${info.video.height}p exceeds the client's ${opts.caps.maxHeight}p.`,
+    });
+  }
+  return blockers;
+}
+
 export function planPlayback(
   info: MediaInfo,
-  opts: { quality: Quality | 'auto'; caps: ClientCapabilities; preferredAudioLanguage?: string },
+  opts: {
+    quality: Quality | 'auto';
+    caps: ClientCapabilities;
+    preferredAudioLanguage?: string;
+    copySource?: CopySource;
+  },
 ): PlaybackPlan {
-  const reasons: PlanReason[] = [];
+  const audioForCopy = selectAudioStream(info.audio, opts.preferredAudioLanguage);
+  const blockers = copyBlockers(info, opts, audioForCopy);
+  if (blockers.length === 0 && opts.copySource) {
+    const { copySource } = opts;
+    return {
+      video: {
+        action: 'copy',
+        codec: copySource.codec,
+        codecString: copySource.codecString,
+        outputWidth: info.video.width,
+        outputHeight: info.video.height,
+        frameRate: info.video.frameRate ?? 24,
+        quality: qualityForHeight(info.video.height),
+        hvc1: copySource.codec === 'hevc',
+        videoRange: info.video.videoRange,
+      },
+      audio: audioForCopy
+        ? {
+            action: 'copy',
+            streamIndex: audioForCopy.index,
+            channels: audioForCopy.channels === 1 ? 1 : 2,
+            codecString: 'mp4a.40.2',
+          }
+        : null,
+      bandwidth: Math.ceil((copySource.peakBitrate * 11) / 10),
+      reasons: [
+        {
+          code: 'COPY',
+          message: `Source ${info.video.codec} is streamed without re-encoding (${copySource.codecString}).`,
+        },
+        ...(audioForCopy ? [] : [{ code: 'NO_AUDIO', message: 'Source has no audio stream.' }]),
+      ],
+    };
+  }
+
+  const reasons: PlanReason[] = [...blockers];
   const { rendition, reasons: rReasons } = selectRendition(
     info.video.height,
     opts.quality,
@@ -209,22 +337,11 @@ export function planPlayback(
   reasons.push(...rReasons);
 
   const copyEligible = isSafariCompatibleVideo(info.video, opts.caps);
-  reasons.push(
-    copyEligible
-      ? {
-          code: 'COPY_ELIGIBLE_NOT_IMPLEMENTED',
-          message:
-            'Source video is Safari-compatible and could be remuxed, but copy mode needs a keyframe index (milestone M2); transcoding.',
-        }
-      : {
-          code: 'VIDEO_TRANSCODE_REQUIRED',
-          message: `Source video ${info.video.codec}/${info.video.profile ?? '?'}/${info.video.pixFmt ?? '?'} is not natively decodable by Safari.`,
-        },
-  );
   if (info.video.hdr) {
     reasons.push({
       code: 'HDR_TONEMAP_MISSING',
-      message: 'HDR source: SDR tone mapping is not implemented in M0; colours will be inaccurate.',
+      message:
+        'HDR source transcoded to SDR without tone mapping (not implemented yet); colours will be inaccurate.',
     });
   }
 

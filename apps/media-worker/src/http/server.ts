@@ -115,7 +115,10 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       video: {
         width: session.plan.video.outputWidth,
         height: session.plan.video.outputHeight,
-        quality: session.plan.video.rendition.quality,
+        quality:
+          session.plan.video.action === 'copy'
+            ? session.plan.video.quality
+            : session.plan.video.rendition.quality,
         codecs: session.plan.video.codecString,
       },
       subtitles: session.subtitles.map((s) => ({
@@ -182,6 +185,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
           height: plan.video.outputHeight,
           frameRate: plan.video.frameRate,
           uri: 'video/index.m3u8',
+          ...(plan.video.action === 'copy' ? { videoRange: plan.video.videoRange } : {}),
         },
         session.subtitles.map((s) => ({
           language: s.language,

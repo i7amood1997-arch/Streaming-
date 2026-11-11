@@ -118,8 +118,8 @@ Response `201`:
   ],
   "decisions": [
     {
-      "code": "COPY_ELIGIBLE_NOT_IMPLEMENTED",
-      "message": "Source video is Safari-compatible and could be remuxed, …"
+      "code": "COPY",
+      "message": "Source h264 is streamed without re-encoding (avc1.640028)."
     }
   ]
 }
@@ -127,8 +127,11 @@ Response `201`:
 
 `masterPlaylistUrl` is absolute when `PUBLIC_BASE_URL` is set, otherwise
 relative to the API origin. `decisions` explain every non-obvious choice
-(codes: `QUALITY_CAPPED`, `UHD_REQUIRES_PASSTHROUGH`, `COPY_ELIGIBLE_NOT_IMPLEMENTED`,
-`VIDEO_TRANSCODE_REQUIRED`, `AUDIO_TRANSCODE_REQUIRED`, `HDR_TONEMAP_MISSING`, `NO_AUDIO`).
+(codes: `COPY` (stream copy, no re-encoding), `COPY_INDEX_UNAVAILABLE`, `COPY_INDEX_ERROR`,
+`COPY_INDEX_MISMATCH`, `AUDIO_BLOCKS_COPY`, `DOWNSCALE_REQUESTED`, `CLIENT_RESOLUTION_LIMIT`,
+`VIDEO_TRANSCODE_REQUIRED`, `AUDIO_TRANSCODE_REQUIRED`, `QUALITY_CAPPED`, `UHD_REQUIRES_PASSTHROUGH`,
+`HDR_TONEMAP_MISSING`, `NO_AUDIO`). With `quality: "auto"` a Safari-compatible source is
+streamed by copy at its own resolution (up to 4K for HEVC-capable clients).
 
 Errors: `400`, `404` (not in catalog), `502 SOURCE_UNAVAILABLE`, `503 CAPACITY_EXCEEDED`.
 

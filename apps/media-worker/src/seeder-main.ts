@@ -5,12 +5,12 @@ import { startSeeder } from './fixtures/seeder.js';
 const port = Number(process.env['SEED_PORT'] ?? 51413);
 const fixtures = await ensureFixtures(DEFAULT_FIXTURES_DIR);
 const seeder = await startSeeder({
-  torrentPath: fixtures.torrentPath,
+  torrentPaths: fixtures.torrentPaths,
   dataPath: fixtures.mediaRoot,
   port,
 });
 process.stdout.write(
-  `Seeding ${fixtures.infoHash} at ${seeder.address}\n` +
+  `Seeding ${String(seeder.torrents.length)} catalog torrents at ${seeder.address}\n` +
     `Start the server with: TORRENT_BOOTSTRAP_PEERS=${seeder.address} TORRENT_ALLOW_PRIVATE_PEERS=true TORRENT_DHT=false TORRENT_TRACKERS=false pnpm start\n`,
 );
 process.on('SIGINT', () => {

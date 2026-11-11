@@ -41,6 +41,7 @@ describe('buildTranscodeArgs', () => {
         pixFmt: 'yuv420p',
         frameRate: 24000 / 1001,
         hdr: false,
+        videoRange: 'SDR',
       },
       audio: [
         {
@@ -51,6 +52,7 @@ describe('buildTranscodeArgs', () => {
           sampleRate: 48000,
           language: undefined,
           isDefault: true,
+          bitRate: 128_000,
         },
       ],
       subtitles: [],

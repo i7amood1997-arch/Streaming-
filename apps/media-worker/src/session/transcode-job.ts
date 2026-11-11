@@ -17,9 +17,29 @@ export interface JobExit {
   stoppedByUs: boolean;
 }
 
-interface JobEvents {
+export interface JobEvents {
   segment: [index: number];
   exit: [JobExit];
+}
+
+/**
+ * Something that writes `seg-<n>.m4s` files from a start segment onwards:
+ * a long-running transcode (TranscodeJob) or per-segment stream copies
+ * (CopySegmentProducer). Sessions drive both through this interface.
+ */
+export interface SegmentProducer extends EventEmitter<JobEvents> {
+  readonly id: string;
+  readonly startSegment: number;
+  /** Highest segment produced (startSegment - 1 if none). */
+  readonly head: number;
+  readonly state: JobState;
+  readonly alive: boolean;
+  /** Where this producer writes its (byte-identical) init segment. */
+  readonly initPath: string;
+  start(): void;
+  pause(): void;
+  resume(): void;
+  stop(): void;
 }
 
 /**
@@ -27,7 +47,7 @@ interface JobEvents {
  * Completion is detected from ffmpeg's own job playlist, which it rewrites
  * atomically (temp_file) after each segment is fully written.
  */
-export class TranscodeJob extends EventEmitter<JobEvents> {
+export class TranscodeJob extends EventEmitter<JobEvents> implements SegmentProducer {
   private proc: ChildProcess | null = null;
   private watcher: FSWatcher | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -44,6 +64,7 @@ export class TranscodeJob extends EventEmitter<JobEvents> {
     private readonly ffmpegPath: string,
     private readonly args: string[],
     private readonly playlistPath: string,
+    readonly initPath: string,
   ) {
     super();
     this._head = startSegment - 1;

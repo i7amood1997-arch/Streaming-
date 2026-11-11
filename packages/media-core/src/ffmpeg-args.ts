@@ -1,3 +1,5 @@
+import { COPY_SEEK_OFFSET_SEC } from './copy-timeline.js';
+import type { CopySegment } from './copy-timeline.js';
 import { AUDIO_BITRATE } from './plan.js';
 import type { PlaybackPlan } from './plan.js';
 
@@ -41,6 +43,7 @@ export function buildTranscodeArgs(spec: TranscodeJobSpec): string[] {
   const d = spec.segmentDurationSec;
   const startSec = spec.startSegment * d;
   const v = plan.video;
+  if (v.action !== 'transcode') throw new Error('buildTranscodeArgs needs a transcode plan');
   const level = `${Math.floor(v.h264Level / 10)}.${v.h264Level % 10}`;
   const filters = [
     `scale=w=${v.outputWidth}:h=${v.outputHeight}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
@@ -126,5 +129,87 @@ export function completedSegmentsFromPlaylist(playlist: string): number[] {
   for (const match of playlist.matchAll(/^(?:.*\/)?seg-(\d+)\.m4s\s*$/gm)) {
     out.push(Number(match[1]));
   }
+  return out;
+}
+
+export interface CopySegmentJobSpec {
+  inputUrl: string;
+  videoStreamIndex: number;
+  audioStreamIndex: number | null;
+  segment: CopySegment;
+  /** Tag HEVC as `hvc1` (parameter sets out-of-band), required by Apple players. */
+  hvc1: boolean;
+  /** Pattern for this job's own segment files; only `<index>` is kept. */
+  segmentFilePattern: string;
+  jobPlaylistPath: string;
+  initFileName: string;
+  readTimeoutSec: number;
+}
+
+/**
+ * Builds the ffmpeg command that stream-copies exactly one segment.
+ *
+ * Exactness comes from the HLS muxer, not from `-to`: input `-to` cuts by
+ * decode time and would duplicate the next GOP's first packets, whereas the
+ * muxer splits on the keyframe packet itself. With hls_time just under the
+ * segment length, its first split is precisely the next boundary keyframe.
+ * The job reads one second past the boundary so that keyframe is seen; the
+ * partial following segment it starts is discarded by the caller. No
+ * `-start_at_zero`: copy mode works in the container's own timestamps, which
+ * is what the keyframe index reports.
+ */
+export function buildCopySegmentArgs(spec: CopySegmentJobSpec): string[] {
+  const { segment } = spec;
+  const args = [
+    '-hide_banner',
+    '-nostdin',
+    '-loglevel',
+    'error',
+    '-rw_timeout',
+    String(spec.readTimeoutSec * 1_000_000),
+  ];
+  if (segment.index > 0) args.push('-ss', (segment.boundarySec + COPY_SEEK_OFFSET_SEC).toFixed(6));
+  if (segment.nextBoundarySec !== undefined)
+    args.push('-to', (segment.nextBoundarySec + 1).toFixed(6));
+  args.push('-i', spec.inputUrl, '-map', `0:${spec.videoStreamIndex}`);
+  if (spec.audioStreamIndex !== null) args.push('-map', `0:${spec.audioStreamIndex}`);
+  args.push('-c', 'copy');
+  if (spec.hvc1) args.push('-tag:v', 'hvc1');
+  const length =
+    segment.nextBoundarySec !== undefined ? segment.nextBoundarySec - segment.boundarySec : 0;
+  args.push(
+    '-copyts',
+    '-avoid_negative_ts',
+    'disabled',
+    '-max_muxing_queue_size',
+    '4096',
+    '-f',
+    'hls',
+    '-hls_time',
+    segment.nextBoundarySec !== undefined ? Math.max(0.001, length - 0.001).toFixed(6) : '1000000',
+    '-hls_segment_type',
+    'fmp4',
+    '-hls_segment_options',
+    'movflags=+frag_discont',
+    '-hls_playlist_type',
+    'event',
+    '-hls_list_size',
+    '0',
+    '-start_number',
+    String(segment.index),
+    '-hls_fmp4_init_filename',
+    spec.initFileName,
+    '-hls_segment_filename',
+    spec.segmentFilePattern,
+    spec.jobPlaylistPath,
+  );
+  return args;
+}
+
+/** EXTINF durations by segment index from an ffmpeg job playlist. */
+export function segmentDurationsFromPlaylist(playlist: string): Map<number, number> {
+  const out = new Map<number, number>();
+  const re = /#EXTINF:([0-9.]+),\s*\n(?:.*\/)?[^\n]*?-(\d+)\.m4s/g;
+  for (const m of playlist.matchAll(re)) out.set(Number(m[2]), Number(m[1]));
   return out;
 }

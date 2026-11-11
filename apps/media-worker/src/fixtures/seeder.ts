@@ -5,7 +5,7 @@ import type { Torrent } from 'webtorrent';
 export interface Seeder {
   /** `127.0.0.1:<port>` peer address for the leecher to dial. */
   address: string;
-  torrent: Torrent;
+  torrents: Torrent[];
   close: () => Promise<void>;
 }
 
@@ -15,7 +15,8 @@ export interface Seeder {
  * tests and development without any third-party network dependency.
  */
 export async function startSeeder(opts: {
-  torrentPath: string;
+  /** Every torrent to seed from `dataPath` (one BitTorrent client, one port). */
+  torrentPaths: string[];
   dataPath: string;
   port?: number;
 }): Promise<Seeder> {
@@ -29,21 +30,24 @@ export async function startSeeder(opts: {
     natPmp: false,
     utp: false,
   });
-  const torrentFile = await readFile(opts.torrentPath);
-  const torrent = await new Promise<Torrent>((resolve, reject) => {
-    client.on('error', reject);
-    const t = client.add(torrentFile, { path: opts.dataPath });
-    const onDone = () => {
-      resolve(t);
-    };
-    // Existing data is hash-checked on add; it seeds once every piece verified.
-    if (t.progress === 1) onDone();
-    else t.once('done', onDone);
-  });
+  client.on('error', () => undefined);
+  const torrents: Torrent[] = [];
+  for (const torrentPath of opts.torrentPaths) {
+    const torrentFile = await readFile(torrentPath);
+    torrents.push(
+      await new Promise<Torrent>((resolve, reject) => {
+        const t = client.add(torrentFile, { path: opts.dataPath });
+        t.once('error', reject);
+        // Existing data is hash-checked on add; it seeds once every piece verified.
+        if (t.progress === 1) resolve(t);
+        else t.once('done', () => resolve(t));
+      }),
+    );
+  }
   const addr = await waitForAddress(client);
   return {
     address: `127.0.0.1:${addr.port}`,
-    torrent,
+    torrents,
     close: () =>
       new Promise<void>((resolve) => {
         client.destroy(() => {

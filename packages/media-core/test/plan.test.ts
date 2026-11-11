@@ -30,6 +30,7 @@ function media(
       pixFmt: 'yuv420p',
       frameRate: 24000 / 1001,
       hdr: false,
+      videoRange: 'SDR',
       ...overrides,
     },
     audio: audio.map((a, i) => ({
@@ -40,6 +41,7 @@ function media(
       sampleRate: 48000,
       language: undefined,
       isDefault: i === 0,
+      bitRate: 128_000,
       ...a,
     })),
     subtitles: [],
@@ -119,7 +121,7 @@ describe('planPlayback', () => {
       capFrameRate: false,
     });
     expect(plan.audio).toMatchObject({ codecString: 'mp4a.40.2', channels: 2, streamIndex: 1 });
-    expect(plan.reasons.map((r) => r.code)).toContain('COPY_ELIGIBLE_NOT_IMPLEMENTED');
+    expect(plan.reasons.map((r) => r.code)).toContain('COPY_INDEX_UNAVAILABLE');
     expect(plan.bandwidth).toBe(Math.ceil((3_500_000 + 160_000) * 1.1));
   });
 
@@ -131,6 +133,7 @@ describe('planPlayback', () => {
         caps,
       },
     );
+    if (plan.video.action !== 'transcode') throw new Error('expected transcode');
     expect(plan.video.frameRate).toBe(60);
     expect(plan.video.capFrameRate).toBe(true);
     expect(plan.reasons.map((r) => r.code)).toContain('AUDIO_TRANSCODE_REQUIRED');
@@ -152,6 +155,75 @@ describe('planPlayback', () => {
     const plan = planPlayback(media({}, []), { quality: 'auto', caps });
     expect(plan.audio).toBeNull();
     expect(plan.reasons.map((r) => r.code)).toContain('NO_AUDIO');
+  });
+});
+
+describe('planPlayback copy mode', () => {
+  const h264Copy = { codec: 'h264' as const, codecString: 'avc1.640028', peakBitrate: 6_000_000 };
+
+  it('copies a Safari-compatible source with AAC audio', () => {
+    const plan = planPlayback(media(), { quality: 'auto', caps, copySource: h264Copy });
+    expect(plan.video).toEqual({
+      action: 'copy',
+      codec: 'h264',
+      codecString: 'avc1.640028',
+      outputWidth: 1920,
+      outputHeight: 1080,
+      frameRate: 24000 / 1001,
+      quality: '1080p',
+      hvc1: false,
+      videoRange: 'SDR',
+    });
+    expect(plan.audio).toMatchObject({ action: 'copy', streamIndex: 1, codecString: 'mp4a.40.2' });
+    expect(plan.bandwidth).toBe(6_600_000);
+    expect(plan.reasons.map((r) => r.code)).toEqual(['COPY']);
+  });
+
+  it('serves 4K HEVC by passthrough to capable clients, tagged hvc1', () => {
+    const uhd = media({
+      codec: 'hevc',
+      profile: 'Main 10',
+      pixFmt: 'yuv420p10le',
+      width: 3840,
+      height: 2160,
+    });
+    const plan = planPlayback(uhd, {
+      quality: '2160p',
+      caps: { hevc: true, maxHeight: 2160 },
+      copySource: { codec: 'hevc', codecString: 'hvc1.2.4.L150.90', peakBitrate: 20_000_000 },
+    });
+    expect(plan.video).toMatchObject({
+      action: 'copy',
+      quality: '2160p',
+      hvc1: true,
+      codecString: 'hvc1.2.4.L150.90',
+    });
+  });
+
+  it('explains every reason copy is declined, then transcodes', () => {
+    const uhd = media(
+      { codec: 'hevc', profile: 'Main 10', pixFmt: 'yuv420p10le', width: 3840, height: 2160 },
+      [{ codec: 'ac3', profile: undefined, channels: 6 }],
+    );
+    const plan = planPlayback(uhd, {
+      quality: 'auto',
+      caps: { hevc: false, maxHeight: 1080 },
+      copySource: { codec: 'hevc', codecString: 'hvc1.2.4.L150.90', peakBitrate: 1 },
+    });
+    expect(plan.video.action).toBe('transcode');
+    expect(plan.reasons.map((r) => r.code)).toEqual(
+      expect.arrayContaining([
+        'VIDEO_TRANSCODE_REQUIRED',
+        'AUDIO_BLOCKS_COPY',
+        'CLIENT_RESOLUTION_LIMIT',
+      ]),
+    );
+  });
+
+  it('transcodes when the viewer asks for less than the source', () => {
+    const plan = planPlayback(media(), { quality: '720p', caps, copySource: h264Copy });
+    expect(plan.video.action).toBe('transcode');
+    expect(plan.reasons.map((r) => r.code)).toContain('DOWNSCALE_REQUESTED');
   });
 });
 
@@ -197,7 +269,13 @@ describe('toMediaInfo', () => {
         { index: 4, codec_type: 'subtitle', codec_name: 'subrip', tags: { language: 'eng' } },
       ],
     });
-    expect(info.video).toMatchObject({ index: 1, codec: 'hevc', hdr: true, height: 2160 });
+    expect(info.video).toMatchObject({
+      index: 1,
+      codec: 'hevc',
+      hdr: true,
+      videoRange: 'PQ',
+      height: 2160,
+    });
     expect(info.video.frameRate).toBeCloseTo(23.976, 3);
     expect(info.audio[0]).toMatchObject({
       codec: 'eac3',

@@ -1,6 +1,7 @@
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import type { ByteRangeReader } from '@streaming/media-core';
 import WebTorrent from 'webtorrent';
 import type { Torrent } from 'webtorrent';
 
@@ -100,6 +101,22 @@ export class TorrentHandle {
       chunks.push(chunk as Buffer);
     }
     return Buffer.concat(chunks);
+  }
+
+  /** Random-access reader over one file, for container indexing (fetches only what is read). */
+  reader(index: number): ByteRangeReader {
+    const size = this.fileLength(index);
+    return {
+      size,
+      read: async (offset, length) => {
+        const end = Math.min(size, offset + length) - 1;
+        if (end < offset) return new Uint8Array(0);
+        const chunks: Buffer[] = [];
+        for await (const chunk of this.createReadStream(index, offset, end))
+          chunks.push(chunk as Buffer);
+        return Buffer.concat(chunks);
+      },
+    };
   }
 
   addPeer(addr: string): void {

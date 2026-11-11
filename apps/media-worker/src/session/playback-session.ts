@@ -2,13 +2,11 @@ import { copyFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { segmentNotReady, transcodeFailed } from '../errors.js';
-import { buildTranscodeArgs } from '@streaming/media-core';
 import type { PlaybackPlan } from '@streaming/media-core';
 import type { SegmentTiming } from '@streaming/media-core';
 import type { MediaInfo } from '@streaming/media-core';
 import type { Semaphore } from './semaphore.js';
-import { TranscodeJob } from './transcode-job.js';
-import type { JobExit } from './transcode-job.js';
+import type { JobExit, SegmentProducer } from './transcode-job.js';
 
 export interface SubtitleTrack {
   /** URL-safe identifier, e.g. `ar` or `en-forced`. */
@@ -26,7 +24,6 @@ export interface SessionInit {
   id: string;
   contentId: string;
   dir: string;
-  inputUrl: string;
   info: MediaInfo;
   plan: PlaybackPlan;
   timeline: SegmentTiming[];
@@ -35,6 +32,14 @@ export interface SessionInit {
   /** Segment the viewer starts at (resume position); the first encoder starts there. */
   initialSegment: number;
   onDispose: () => Promise<void>;
+  /** Builds the producer for a (re)start at `startSegment`. */
+  createProducer: (startSegment: number, id: string, hooks: ProducerHooks) => SegmentProducer;
+  /** Transcoding is CPU-bound and limited by a worker-wide semaphore; copy is not. */
+  usesTranscodeSlot: boolean;
+}
+
+export interface ProducerHooks {
+  onDrift: (index: number, plannedSec: number, actualSec: number) => void;
 }
 
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -50,6 +55,8 @@ export interface SessionStats {
   seekRestarts: number;
   segmentsServed: number;
   pauses: number;
+  /** Copy mode: segments whose actual length differed from the planned one. */
+  driftEvents: number;
   completedSegments: number;
   job: { id: string; startSegment: number; head: number; state: string } | null;
 }
@@ -73,11 +80,12 @@ export class PlaybackSession {
 
   private readonly mediaDir: string;
   private readonly jobsDir: string;
-  private readonly inputUrl: string;
+  private readonly createProducer: SessionInit['createProducer'];
+  private readonly usesTranscodeSlot: boolean;
   private readonly onDispose: () => Promise<void>;
   private readonly completed = new Set<number>();
   private readonly waiters = new Map<number, Set<Waiter>>();
-  private job: TranscodeJob | null = null;
+  private job: SegmentProducer | null = null;
   private releaseSlot: (() => void) | null = null;
   private jobSeq = 0;
   private lastRequested = 0;
@@ -86,7 +94,13 @@ export class PlaybackSession {
   private starting: Promise<void> | null = null;
   private disposed = false;
   private consecutiveFailures = 0;
-  private readonly stats_ = { jobsStarted: 0, seekRestarts: 0, segmentsServed: 0, pauses: 0 };
+  private readonly stats_ = {
+    jobsStarted: 0,
+    seekRestarts: 0,
+    segmentsServed: 0,
+    pauses: 0,
+    driftEvents: 0,
+  };
 
   constructor(
     init: SessionInit,
@@ -100,7 +114,8 @@ export class PlaybackSession {
     this.timeline = init.timeline;
     this.subtitles = init.subtitles;
     this.expiresAtSec = init.expiresAtSec;
-    this.inputUrl = init.inputUrl;
+    this.createProducer = init.createProducer;
+    this.usesTranscodeSlot = init.usesTranscodeSlot;
     this.onDispose = init.onDispose;
     this.lastRequested = Math.min(Math.max(0, init.initialSegment), init.timeline.length - 1);
     this.mediaDir = path.join(init.dir, 'media');
@@ -236,36 +251,23 @@ export class PlaybackSession {
 
   private async startJob(startSegment: number): Promise<void> {
     this.stopJob();
-    this.releaseSlot = await this.transcodeSlots.acquire(this.config.segmentWaitTimeoutSec * 1000);
+    if (this.usesTranscodeSlot) {
+      this.releaseSlot = await this.transcodeSlots.acquire(
+        this.config.segmentWaitTimeoutSec * 1000,
+      );
+    }
     if (this.disposed) {
       this.freeSlot();
       return;
     }
     const id = `j${++this.jobSeq}`;
-    const playlistPath = path.join(this.jobsDir, `${id}.m3u8`);
-    const initFileName = `${id}-init.mp4`;
-    const job = new TranscodeJob(
-      id,
-      startSegment,
-      this.config.ffmpegPath,
-      buildTranscodeArgs({
-        inputUrl: this.inputUrl,
-        videoStreamIndex: this.info.video.index,
-        plan: this.plan,
-        startSegment,
-        segmentDurationSec: this.config.segmentDurationSec,
-        segmentStartTimes: this.timeline.slice(startSegment).map((t) => t.startSec),
-        mediaDir: this.mediaDir,
-        jobPlaylistPath: playlistPath,
-        initFileName,
-        threads: this.config.ffmpegThreads,
-        preset: this.config.x264Preset,
-        readTimeoutSec: this.config.sourceReadTimeoutSec,
-      }),
-      playlistPath,
-    );
+    const job = this.createProducer(startSegment, id, {
+      onDrift: () => {
+        this.stats_.driftEvents += 1;
+      },
+    });
     job.on('segment', (index) => {
-      void this.onSegment(job, index, path.join(this.jobsDir, initFileName));
+      void this.onSegment(job, index, job.initPath);
     });
     job.on('exit', (exit) => {
       this.onJobExit(job, exit);
@@ -275,7 +277,7 @@ export class PlaybackSession {
     job.start();
   }
 
-  private async onSegment(job: TranscodeJob, index: number, jobInitPath: string): Promise<void> {
+  private async onSegment(job: SegmentProducer, index: number, jobInitPath: string): Promise<void> {
     if (!this.initReady) {
       // All jobs emit byte-identical init segments (movflags=+frag_discont),
       // so the first one written becomes the session's canonical init.mp4.
@@ -307,7 +309,7 @@ export class PlaybackSession {
     }
   }
 
-  private onJobExit(job: TranscodeJob, exit: JobExit): void {
+  private onJobExit(job: SegmentProducer, exit: JobExit): void {
     if (job !== this.job) return; // superseded by a seek restart
     this.freeSlot();
     if (exit.stoppedByUs) return;

@@ -48,12 +48,15 @@ Redis outage → `/readyz` 503, back to ready within ~1 s after recovery.
 
 **Exit:** ✅ compose stack healthy. CI on GitHub: see the run for the M1 commits.
 
-## M2 — Media worker v1 ⏳
+## M2 — Media worker v1 🔄
 
 - Worker ↔ API session broker contract (API creates sessions, picks a worker).
-- **Copy (remux) mode:** keyframe index from MP4 `stss` / MKV `Cues`;
-  synthetic playlist from real keyframe times; HEVC passthrough (`hvc1`).
-- 4K passthrough when source and client allow it.
+- ✅ **Copy (remux) mode:** keyframe index from MP4 (`stss`/`stts`/`ctts`/`elst`)
+  and Matroska (`Cues`) via byte ranges; keyframe-aligned VOD playlists;
+  per-segment stream copy; exact `avcC`/`hvcC` codec strings; HEVC as `hvc1`;
+  `VIDEO-RANGE` for HDR. Evidence: [docs/feasibility/M2-copy-mode.md](docs/feasibility/M2-copy-mode.md).
+- ✅ 4K passthrough when source and client allow it (4K HEVC Main 10 e2e).
+- ⏳ Copy video + separate transcoded audio rendition (AC-3/DTS/5.1 sources).
 - Audio: stream selection by language; AAC passthrough; AC-3/E-AC-3
   passthrough rendition for Apple devices.
 - Embedded text subtitles (progressive extraction); HDR → SDR tone mapping.

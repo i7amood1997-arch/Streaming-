@@ -42,6 +42,8 @@ export interface VideoStreamInfo {
   pixFmt: string | undefined;
   frameRate: number | undefined;
   hdr: boolean;
+  /** Transfer characteristics: SDR, HDR10/Dolby-style PQ, or HLG. */
+  videoRange: 'SDR' | 'PQ' | 'HLG';
 }
 
 export interface AudioStreamInfo {
@@ -52,6 +54,8 @@ export interface AudioStreamInfo {
   sampleRate: number | undefined;
   language: string | undefined;
   isDefault: boolean;
+  /** Bits/s as reported by the container, when known. */
+  bitRate: number | undefined;
 }
 
 export interface SubtitleStreamInfo {
@@ -106,6 +110,7 @@ export function toMediaInfo(raw: unknown): MediaInfo {
     pixFmt: videoRaw.pix_fmt,
     frameRate: parseFrameRate(videoRaw.avg_frame_rate) ?? parseFrameRate(videoRaw.r_frame_rate),
     hdr: transfer === 'smpte2084' || transfer === 'arib-std-b67',
+    videoRange: transfer === 'smpte2084' ? 'PQ' : transfer === 'arib-std-b67' ? 'HLG' : 'SDR',
   };
   const audio = probe.streams
     .filter((s) => s.codec_type === 'audio' && s.codec_name)
@@ -117,6 +122,7 @@ export function toMediaInfo(raw: unknown): MediaInfo {
       sampleRate: s.sample_rate ? Number(s.sample_rate) : undefined,
       language: s.tags?.['language'],
       isDefault: s.disposition?.['default'] === 1,
+      bitRate: s.bit_rate ? Number(s.bit_rate) : undefined,
     }));
   const subtitles = probe.streams
     .filter((s) => s.codec_type === 'subtitle')

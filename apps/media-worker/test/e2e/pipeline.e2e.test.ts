@@ -83,7 +83,7 @@ beforeAll(async () => {
   fixtures = await ensureFixtures();
   scratch = path.resolve('.data', `e2e-${Date.now()}`);
   await mkdir(scratch, { recursive: true });
-  seeder = await startSeeder({ torrentPath: fixtures.torrentPath, dataPath: fixtures.mediaRoot });
+  seeder = await startSeeder({ torrentPaths: fixtures.torrentPaths, dataPath: fixtures.mediaRoot });
   config = loadConfig(
     {},
     {

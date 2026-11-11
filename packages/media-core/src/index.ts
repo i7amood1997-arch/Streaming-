@@ -4,6 +4,9 @@
  * subtitle conversion (incl. Arabic RTL) and stream capability tokens.
  * No I/O lives here, so everything is unit-testable.
  */
+export * from './codec-config.js';
+export * from './container/index.js';
+export * from './copy-timeline.js';
 export * from './ffmpeg-args.js';
 export * from './media-info.js';
 export * from './plan.js';

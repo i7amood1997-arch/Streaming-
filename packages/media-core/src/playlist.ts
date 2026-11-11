@@ -81,6 +81,8 @@ export interface MasterVariant {
   height: number;
   frameRate: number;
   uri: string;
+  /** Omitted means SDR. Required for HDR (PQ/HLG) so Apple players handle it correctly. */
+  videoRange?: 'SDR' | 'PQ' | 'HLG';
 }
 
 export interface MasterSubtitle {
@@ -118,6 +120,9 @@ export function buildMasterPlaylist(variant: MasterVariant, subtitles: MasterSub
     `CODECS=${quoted(variant.codecs.join(','))}`,
     `RESOLUTION=${variant.width}x${variant.height}`,
     `FRAME-RATE=${variant.frameRate.toFixed(3)}`,
+    ...(variant.videoRange && variant.videoRange !== 'SDR'
+      ? [`VIDEO-RANGE=${variant.videoRange}`]
+      : []),
     'CLOSED-CAPTIONS=NONE',
   ];
   if (subtitles.length > 0) attrs.push('SUBTITLES="subs"');

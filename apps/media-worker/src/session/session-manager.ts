@@ -4,13 +4,31 @@ import path from 'node:path';
 import type { Catalog } from '../catalog.js';
 import type { Config } from '../config.js';
 import { capacityExceeded, notFound, sourceUnavailable } from '../errors.js';
-import { planPlayback } from '@streaming/media-core';
-import type { ClientCapabilities, Quality } from '@streaming/media-core';
-import { segmentTimeline } from '@streaming/media-core';
+import {
+  AUDIO_BITRATE,
+  UnsupportedSourceError,
+  buildTranscodeArgs,
+  copySegmentTimeline,
+  decodeSubtitleBytes,
+  detectSidecarSubtitles,
+  indexSource,
+  languageInfo,
+  parseCues,
+  planPlayback,
+  segmentTimeline,
+  toWebVtt,
+} from '@streaming/media-core';
+import type {
+  ClientCapabilities,
+  CopySource,
+  CopyTimeline,
+  MediaInfo,
+  Quality,
+  SegmentTiming,
+} from '@streaming/media-core';
 import { probeMedia } from '../media/probe.js';
-import { decodeSubtitleBytes } from '@streaming/media-core';
-import { detectSidecarSubtitles, languageInfo } from '@streaming/media-core';
-import { parseCues, toWebVtt } from '@streaming/media-core';
+import { CopySegmentProducer } from './copy-producer.js';
+import { TranscodeJob } from './transcode-job.js';
 import type { TorrentEngine, TorrentHandle } from '../torrent/engine.js';
 import type { TorrentSourceServer } from '../torrent/source-server.js';
 import { PlaybackSession } from './playback-session.js';
@@ -113,14 +131,25 @@ export class SessionManager {
           `probe failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       });
+      const copy = await prepareCopy(handle, entry.videoFileIndex, info, config.segmentDurationSec);
       const plan = planPlayback(info, {
         quality: req.quality,
         caps: req.capabilities,
         ...(req.preferredAudioLanguage
           ? { preferredAudioLanguage: req.preferredAudioLanguage }
           : {}),
+        ...(copy.source ? { copySource: copy.source } : {}),
       });
-      const timeline = segmentTimeline(info.durationSec, config.segmentDurationSec);
+      if (copy.indexError && plan.video.action === 'transcode') {
+        plan.reasons.push({ code: 'COPY_INDEX_ERROR', message: copy.indexError });
+      }
+      const copyTimeline = plan.video.action === 'copy' ? copy.timeline : undefined;
+      const timeline: SegmentTiming[] =
+        copyTimeline?.segments ?? segmentTimeline(info.durationSec, config.segmentDurationSec);
+      const jobsDir = path.join(dir, 'jobs');
+      const mediaDir = path.join(dir, 'media');
+      const video = plan.video;
+      const audioIndex = plan.audio?.streamIndex ?? null;
       const subtitles = await prepareSidecarSubtitles(handle, path.join(dir, 'subs'));
 
       const acquired = handle;
@@ -129,12 +158,53 @@ export class SessionManager {
           id,
           contentId: entry.id,
           dir,
-          inputUrl,
           info,
           plan,
           timeline,
           subtitles,
-          initialSegment: Math.floor(req.startPositionSec / config.segmentDurationSec),
+          initialSegment: segmentIndexAt(timeline, req.startPositionSec),
+          usesTranscodeSlot: video.action === 'transcode',
+          createProducer: (startSegment, jobId, hooks) => {
+            if (video.action === 'copy' && copyTimeline) {
+              return new CopySegmentProducer({
+                id: jobId,
+                startSegment,
+                segments: copyTimeline.segments,
+                ffmpegPath: config.ffmpegPath,
+                inputUrl,
+                videoStreamIndex: info.video.index,
+                audioStreamIndex: audioIndex,
+                hvc1: video.hvc1,
+                jobsDir,
+                mediaDir,
+                readTimeoutSec: config.sourceReadTimeoutSec,
+                onDrift: hooks.onDrift,
+              });
+            }
+            const playlistPath = path.join(jobsDir, `${jobId}.m3u8`);
+            const initFileName = `${jobId}-init.mp4`;
+            return new TranscodeJob(
+              jobId,
+              startSegment,
+              config.ffmpegPath,
+              buildTranscodeArgs({
+                inputUrl,
+                videoStreamIndex: info.video.index,
+                plan,
+                startSegment,
+                segmentDurationSec: config.segmentDurationSec,
+                segmentStartTimes: timeline.slice(startSegment).map((t) => t.startSec),
+                mediaDir,
+                jobPlaylistPath: playlistPath,
+                initFileName,
+                threads: config.ffmpegThreads,
+                preset: config.x264Preset,
+                readTimeoutSec: config.sourceReadTimeoutSec,
+              }),
+              playlistPath,
+              path.join(jobsDir, initFileName),
+            );
+          },
           // Valid for the title's duration plus generous headroom for pauses.
           expiresAtSec: Math.floor(Date.now() / 1000 + info.durationSec + 4 * 3600),
           onDispose: async () => {
@@ -182,6 +252,54 @@ export class SessionManager {
         session.stopJob();
       }
     }
+  }
+}
+
+/** Index of the segment containing `sec` (resume position). */
+export function segmentIndexAt(timeline: readonly SegmentTiming[], sec: number): number {
+  let found = 0;
+  for (const seg of timeline) if (seg.startSec <= sec) found = seg.index;
+  return found;
+}
+
+/**
+ * Builds the keyframe index needed for stream copy by reading only the
+ * container's index structures from the torrent. Any failure simply means
+ * "no copy" and is reported as a plan reason.
+ */
+async function prepareCopy(
+  handle: TorrentHandle,
+  fileIndex: number,
+  info: MediaInfo,
+  segmentDurationSec: number,
+): Promise<{ source?: CopySource; timeline?: CopyTimeline; indexError?: string }> {
+  if (info.video.codec !== 'h264' && info.video.codec !== 'hevc') return {};
+  try {
+    const index = await indexSource(handle.reader(fileIndex));
+    if (index.video.codec !== info.video.codec || !index.video.codecString) {
+      return { indexError: 'Container index does not describe the probed video stream' };
+    }
+    const timeline = copySegmentTimeline(
+      index.video.keyframes,
+      info.durationSec,
+      segmentDurationSec,
+      index.video.endByteMark,
+    );
+    // MP4 byte marks count video only; add the audio track's rate.
+    const audioRate = index.video.videoOnlyBytes
+      ? Math.max(0, ...info.audio.map((a) => a.bitRate ?? AUDIO_BITRATE))
+      : 0;
+    return {
+      timeline,
+      source: {
+        codec: info.video.codec,
+        codecString: index.video.codecString,
+        peakBitrate: timeline.peakBitrate + audioRate,
+      },
+    };
+  } catch (err) {
+    if (err instanceof UnsupportedSourceError) return { indexError: err.message };
+    return { indexError: `Index failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 

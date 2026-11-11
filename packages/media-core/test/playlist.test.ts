@@ -102,6 +102,19 @@ describe('buildMasterPlaylist', () => {
     );
   });
 
+  it('signals HDR video range and omits it for SDR', () => {
+    const v = {
+      bandwidth: 1,
+      codecs: ['hvc1.2.4.L153.B0'],
+      width: 3840,
+      height: 2160,
+      frameRate: 24,
+      uri: 'v.m3u8',
+    };
+    expect(buildMasterPlaylist({ ...v, videoRange: 'PQ' }, [])).toContain(',VIDEO-RANGE=PQ');
+    expect(buildMasterPlaylist({ ...v, videoRange: 'SDR' }, [])).not.toContain('VIDEO-RANGE');
+  });
+
   it('omits the SUBTITLES group when there are no tracks', () => {
     const text = buildMasterPlaylist(
       { bandwidth: 1, codecs: ['avc1.640028'], width: 2, height: 2, frameRate: 25, uri: 'v.m3u8' },

@@ -68,6 +68,11 @@ These docs must match the code. Update them in the same change:
   U+200F.
 - Torrents are added deselected, refcounted, released on session end, and
   deleted after the linger time.
+- Copy mode: boundaries come from the container index (never decoded-frame
+  times), require ≥ 0.3 s to the next keyframe, and each segment is one ffmpeg
+  `-c copy` run seeking to `boundary + 0.2 s` **without** `-start_at_zero`,
+  cut by the HLS muxer (`hls_time` just under the segment length), never by
+  `-to`. HEVC is written as `hvc1`. `driftEvents` must stay 0 in tests.
 
 ## Code conventions
 
