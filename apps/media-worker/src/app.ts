@@ -30,7 +30,10 @@ export async function createApp(
     maxConns: config.torrent.maxConns,
     uploadLimitKiBps: config.torrent.uploadLimitKiBps,
     lingerMs: config.torrentLingerSec * 1000,
+    cacheMaxBytes: config.torrentCacheMaxMiB * 1024 * 1024,
+    readWindowBytes: config.torrentReadWindowMiB * 1024 * 1024,
   });
+  await engine.start();
   const sourceServer = new TorrentSourceServer();
   await sourceServer.listen();
   const manager = new SessionManager({

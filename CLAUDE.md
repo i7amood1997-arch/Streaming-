@@ -66,8 +66,11 @@ These docs must match the code. Update them in the same change:
   iOS native player drops the query on relative URIs.
 - Subtitles are UTF-8 WebVTT with `X-TIMESTAMP-MAP`. RTL lines are wrapped in
   U+200F.
-- Torrents are added deselected, refcounted, released on session end, and
-  deleted after the linger time.
+- Torrents are added deselected, refcounted and released on session end;
+  after the linger time their data stays in the LRU cache
+  (`TORRENT_CACHE_MAX_MIB`). Torrent reads always go through `windowedStream`
+  (never an unbounded `file.createReadStream`), or the whole remainder of the
+  title gets downloaded on every stream open.
 - Copy mode: boundaries come from the container index (never decoded-frame
   times), require ≥ 0.3 s to the next keyframe, and each segment is one ffmpeg
   `-c copy` run seeking to `boundary + 0.2 s` **without** `-start_at_zero`,

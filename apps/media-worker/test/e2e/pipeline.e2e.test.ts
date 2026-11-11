@@ -96,6 +96,8 @@ beforeAll(async () => {
       maxSegmentsAhead: 4,
       minFreeDiskMiB: 0,
       torrentLingerSec: 0,
+      // Cache disabled: this suite checks that released data is deleted.
+      torrentCacheMaxMiB: 0,
       segmentWaitTimeoutSec: 60,
       torrent: {
         port: 0,

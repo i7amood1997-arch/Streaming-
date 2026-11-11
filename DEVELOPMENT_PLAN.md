@@ -61,8 +61,9 @@ Redis outage → `/readyz` 503, back to ready within ~1 s after recovery.
 - Audio: stream selection by language; AAC passthrough; AC-3/E-AC-3
   passthrough rendition for Apple devices.
 - Embedded text subtitles (progressive extraction); HDR → SDR tone mapping.
-- Persistent torrent cache with byte quota + LRU; shared segment cache per
-  `(content, rendition)`.
+- ✅ Persistent torrent cache with byte quota + LRU, verified offline replay after restart;
+  windowed piece selection ([M2-torrent-cache.md](docs/feasibility/M2-torrent-cache.md)).
+- ⏳ Shared segment cache per `(content, rendition)`.
 - Metrics (sessions, encoder speed, rebuffer-inducing waits, swarm health).
 - **Real-world validation** with Sintel / Big Buck Bunny / Tears of Steel /
   Internet Archive titles; **iOS/iPadOS/macOS Safari device matrix** and

@@ -51,6 +51,10 @@ const ConfigSchema = z.object({
   segmentWaitTimeoutSec: z.coerce.number().int().min(1).default(30),
   /** Unreferenced torrents are kept this long for reuse, then deleted from disk. */
   torrentLingerSec: z.coerce.number().int().min(0).default(300),
+  /** Released torrent data kept on disk for reuse, LRU-evicted above this. 0 disables the cache. */
+  torrentCacheMaxMiB: z.coerce.number().int().min(0).default(20_480),
+  /** Pieces are prioritised at most this far ahead of each reader (plus one primed window). */
+  torrentReadWindowMiB: z.coerce.number().int().min(1).max(256).default(8),
   /** Refuse new sessions when free disk falls below this many MiB. */
   minFreeDiskMiB: z.coerce.number().int().min(0).default(2048),
 
@@ -98,6 +102,8 @@ export function loadConfig(
     seekRestartThreshold: env['SEEK_RESTART_THRESHOLD'],
     segmentWaitTimeoutSec: env['SEGMENT_WAIT_TIMEOUT_SEC'],
     torrentLingerSec: env['TORRENT_LINGER_SEC'],
+    torrentCacheMaxMiB: env['TORRENT_CACHE_MAX_MIB'],
+    torrentReadWindowMiB: env['TORRENT_READ_WINDOW_MIB'],
     minFreeDiskMiB: env['MIN_FREE_DISK_MIB'],
     torrent: {
       port: env['TORRENT_PORT'],

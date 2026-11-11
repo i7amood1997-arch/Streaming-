@@ -1,9 +1,11 @@
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import type { ByteRangeReader } from '@streaming/media-core';
 import WebTorrent from 'webtorrent';
-import type { Torrent } from 'webtorrent';
+import { selectEvictions } from './cache-policy.js';
+import type { CacheEntry } from './cache-policy.js';
+import type { Torrent, TorrentFile } from 'webtorrent';
 
 export interface TorrentFileInfo {
   index: number;
@@ -32,6 +34,21 @@ export interface EngineOptions {
   maxConns: number;
   uploadLimitKiBps: number;
   lingerMs: number;
+  /**
+   * Bytes of released torrent data kept on disk for reuse (LRU-evicted above
+   * this). 0 disables the cache: data is deleted once a torrent stops lingering.
+   */
+  cacheMaxBytes: number;
+  /** Read-window size: bounds how far ahead of the reader pieces are prioritised. */
+  readWindowBytes: number;
+}
+
+const INFOHASH_DIR = /^[0-9a-f]{40}$/;
+const MARKER = '.last-used';
+
+export interface CacheUsage {
+  torrents: number;
+  bytes: number;
 }
 
 /**
@@ -58,6 +75,7 @@ export class TorrentHandle {
   constructor(
     private readonly torrent: Torrent,
     private readonly onRelease: () => void,
+    private readonly readWindowBytes: number,
   ) {}
 
   private released = false;
@@ -89,7 +107,7 @@ export class TorrentHandle {
       throw new RangeError(`Invalid range ${start}-${end} for file of ${file.length} bytes`);
     }
     // WebTorrent treats `end: 0` as "until EOF"; enforce the exact length ourselves.
-    return limitStream(file.createReadStream({ start, end }), end - start + 1);
+    return limitStream(windowedStream(file, start, end, this.readWindowBytes), end - start + 1);
   }
 
   async readFile(index: number, maxBytes = 5 * 1024 * 1024): Promise<Buffer> {
@@ -152,6 +170,7 @@ export class TorrentEngine {
   private readonly client: WebTorrent;
   private readonly entries = new Map<string, Entry>();
   private readonly pending = new Map<string, Promise<Torrent>>();
+  private quotaPass: Promise<void> = Promise.resolve();
 
   constructor(private readonly opts: EngineOptions) {
     this.client = new WebTorrent({
@@ -179,7 +198,10 @@ export class TorrentEngine {
     infoHash: string,
     opts: { peers?: string[]; timeoutMs?: number } = {},
   ): Promise<TorrentHandle> {
+    // Never add a torrent while an eviction pass might be deleting its directory.
+    await this.quotaPass;
     const torrent = await this.getOrAdd(torrentFile, infoHash, opts.timeoutMs ?? 60_000);
+    await this.touch(infoHash);
     const entry = this.entries.get(infoHash);
     if (!entry) throw new Error(`Torrent ${infoHash} disappeared while acquiring`);
     if (entry.lingerTimer) {
@@ -188,9 +210,13 @@ export class TorrentEngine {
     }
     entry.refs += 1;
     for (const peer of opts.peers ?? []) torrent.addPeer(peer);
-    return new TorrentHandle(torrent, () => {
-      this.releaseRef(infoHash);
-    });
+    return new TorrentHandle(
+      torrent,
+      () => {
+        this.releaseRef(infoHash);
+      },
+      this.opts.readWindowBytes,
+    );
   }
 
   stats(): TorrentStats[] {
@@ -205,11 +231,26 @@ export class TorrentEngine {
     }));
   }
 
+  /** Creates the data directory and applies the quota to data left by earlier runs. */
+  async start(): Promise<void> {
+    await mkdir(this.opts.dataDir, { recursive: true });
+    await this.enforceQuota();
+  }
+
+  /** Disk used by torrent data (active and cached). */
+  async cacheUsage(): Promise<CacheUsage> {
+    const entries = await this.scanCache();
+    return { torrents: entries.length, bytes: entries.reduce((sum, e) => sum + e.bytes, 0) };
+  }
+
+  /** Shutdown keeps data on disk: the cache survives restarts. */
   async destroy(): Promise<void> {
     for (const entry of this.entries.values()) {
       if (entry.lingerTimer) clearTimeout(entry.lingerTimer);
     }
-    await Promise.all([...this.entries.keys()].map((infoHash) => this.destroyTorrent(infoHash)));
+    await Promise.all(
+      [...this.entries.keys()].map((infoHash) => this.destroyTorrent(infoHash, { keepData: true })),
+    );
     await new Promise<void>((resolve) => {
       this.client.destroy(() => {
         resolve();
@@ -279,24 +320,133 @@ export class TorrentEngine {
     entry.refs = Math.max(0, entry.refs - 1);
     if (entry.refs > 0) return;
     entry.lingerTimer = setTimeout(() => {
-      void this.destroyTorrent(infoHash);
+      void this.destroyTorrent(infoHash, { keepData: true }).then(() => this.enforceQuota());
     }, this.opts.lingerMs);
     entry.lingerTimer.unref();
   }
 
-  private destroyTorrent(infoHash: string): Promise<void> {
+  private async destroyTorrent(infoHash: string, opts: { keepData: boolean }): Promise<void> {
     const entry = this.entries.get(infoHash);
-    if (!entry) return Promise.resolve();
+    if (!entry) return;
     this.entries.delete(infoHash);
-    return new Promise<void>((resolve) => {
-      entry.torrent.destroy({ destroyStore: true }, () => {
+    await new Promise<void>((resolve) => {
+      entry.torrent.destroy({ destroyStore: !opts.keepData }, () => {
         resolve();
       });
-    }).then(() =>
-      // The chunk store deletes files but can leave the directory tree behind.
-      rm(path.join(this.opts.dataDir, infoHash), { recursive: true, force: true }),
-    );
+    });
+    if (opts.keepData) await this.touch(infoHash);
+    // The chunk store deletes files but can leave the directory tree behind.
+    else await rm(path.join(this.opts.dataDir, infoHash), { recursive: true, force: true });
   }
+
+  /** Records use time in a marker file, so LRU order survives restarts. */
+  private async touch(infoHash: string): Promise<void> {
+    const marker = path.join(this.opts.dataDir, infoHash, MARKER);
+    try {
+      const now = new Date();
+      await writeFile(marker, now.toISOString());
+      await utimes(marker, now, now);
+    } catch {
+      /* directory removed concurrently; nothing to record */
+    }
+  }
+
+  private async scanCache(): Promise<CacheEntry[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.opts.dataDir);
+    } catch {
+      return [];
+    }
+    const out: CacheEntry[] = [];
+    for (const name of names.filter((n) => INFOHASH_DIR.test(n))) {
+      const dir = path.join(this.opts.dataDir, name);
+      let lastUsedMs: number;
+      try {
+        lastUsedMs = (await stat(path.join(dir, MARKER))).mtimeMs;
+      } catch {
+        lastUsedMs = (await stat(dir)).mtimeMs;
+      }
+      out.push({
+        infoHash: name,
+        bytes: await allocatedBytes(dir),
+        lastUsedMs,
+        active: this.entries.has(name) || this.pending.has(name),
+      });
+    }
+    return out;
+  }
+
+  /** Serialised: one eviction pass at a time, and acquires wait for it. */
+  private enforceQuota(): Promise<void> {
+    this.quotaPass = this.quotaPass.then(async () => {
+      try {
+        const evict = selectEvictions(await this.scanCache(), this.opts.cacheMaxBytes);
+        for (const infoHash of evict) {
+          if (this.entries.has(infoHash) || this.pending.has(infoHash)) continue; // re-acquired meanwhile
+          await rm(path.join(this.opts.dataDir, infoHash), { recursive: true, force: true });
+        }
+      } catch {
+        // A failed pass (e.g. a directory vanishing mid-scan) must not block
+        // later acquires, which wait on this chain; the next release retries.
+      }
+    });
+    return this.quotaPass;
+  }
+}
+
+/** Bytes allocated on disk under `dir` (sparse, partially downloaded files count only written blocks). */
+async function allocatedBytes(dir: string): Promise<number> {
+  let total = 0;
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += await allocatedBytes(full);
+    else if (entry.isFile()) total += (await stat(full)).blocks * 512;
+  }
+  return total;
+}
+
+/**
+ * WebTorrent selects (prioritises for download) every piece of a read range
+ * as soon as the stream is opened. ffmpeg opens ranges to end-of-file, so a
+ * plain stream would pull the whole remainder of the title from the swarm on
+ * every open (each seek, and for as long as a paused encoder holds its
+ * connection). Reading in windows selects only the window being read plus one
+ * primed window of read-ahead; abandoning the stream deselects both.
+ */
+export function windowedStream(
+  file: TorrentFile,
+  start: number,
+  end: number,
+  windowBytes: number,
+): Readable {
+  async function* windows() {
+    let current: Readable | null = null;
+    let next: Readable | null = null;
+    try {
+      let pos = start;
+      while (pos <= end) {
+        const windowEnd = Math.min(pos + windowBytes - 1, end);
+        current = next ?? file.createReadStream({ start: pos, end: windowEnd });
+        // Prime the following window now so its pieces download while this one is read.
+        next =
+          windowEnd < end
+            ? file.createReadStream({
+                start: windowEnd + 1,
+                end: Math.min(windowEnd + windowBytes, end),
+              })
+            : null;
+        yield* current;
+        current.destroy();
+        current = null;
+        pos = windowEnd + 1;
+      }
+    } finally {
+      current?.destroy();
+      next?.destroy();
+    }
+  }
+  return Readable.from(windows(), { objectMode: false });
 }
 
 /** Passes through at most `length` bytes, then ends and destroys the source. */

@@ -209,12 +209,13 @@ $MEDIA_WORK_DIR/
 - Two-level idle policy: the encoder is stopped after `JOB_IDLE_TIMEOUT_SEC`
   (viewer paused), the session is kept until the longer session timeout.
 - Torrents are reference-counted across sessions; at zero they linger
-  (`TORRENT_LINGER_SEC`) for quick re-use and are then destroyed together with
-  their data directory.
+  (`TORRENT_LINGER_SEC`), then leave the client while their data stays in
+  the cache until LRU eviction.
 - Admission control refuses new sessions below `MIN_FREE_DISK_MIB`.
-- 🟡 M2: persistent torrent cache with byte quota and LRU eviction, so popular
-  titles are not re-downloaded; segment cache shared by sessions with the same
-  `(content, rendition)`.
+- ✅ M2: persistent torrent cache with byte quota and LRU eviction
+  (`TORRENT_CACHE_MAX_MIB`), re-verified on re-add; torrent reads are windowed
+  so only data near the playhead is prioritised.
+- 🟡 Segment cache shared by sessions with the same `(content, rendition)`.
 
 ## 7. Concurrency and scaling ✅ (🟡 multi-node)
 
