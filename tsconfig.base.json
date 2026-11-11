@@ -19,6 +19,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "sourceMap": true,
-    "declaration": false
+    "declaration": false,
+    "customConditions": ["source"]
   }
 }

@@ -15,12 +15,12 @@ architecture is awaiting approval.** There is no product UI yet. Read in this or
 
 ## Prerequisites
 
-| Tool                    | Version                      | Notes                                                                                              |
-| ----------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------- |
-| Node.js                 | ≥ 22.12                      | `.nvmrc` pins 22                                                                                   |
-| pnpm                    | 10.x                         | `corepack enable`                                                                                  |
-| ffmpeg + ffprobe        | ≥ 6.0 with `libx264`         | `apt install ffmpeg` / `brew install ffmpeg`                                                       |
-| Chromium for Playwright | matching `playwright@1.63.0` | `pnpm --filter @streaming/spike-m0-pipeline exec playwright install chromium` (only for e2e tests) |
+| Tool                    | Version                      | Notes                                                                                         |
+| ----------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
+| Node.js                 | ≥ 22.12                      | `.nvmrc` pins 22                                                                              |
+| pnpm                    | 10.x                         | `corepack enable`                                                                             |
+| ffmpeg + ffprobe        | ≥ 6.0 with `libx264`         | `apt install ffmpeg` / `brew install ffmpeg`                                                  |
+| Chromium for Playwright | matching `playwright@1.63.0` | `pnpm --filter @streaming/media-worker exec playwright install chromium` (only for e2e tests) |
 
 ## Install
 
@@ -35,7 +35,7 @@ a prebuilt native binary.
 
 ## Run the M0 pipeline locally
 
-It needs two terminals. Both commands run from `spikes/m0-pipeline`.
+It needs two terminals. Both commands run from `apps/media-worker`.
 
 ```bash
 # 1. Generate the CC0 test title (≈20 s, once) and seed it as a BitTorrent peer
@@ -43,7 +43,7 @@ pnpm seed
 
 # 2. Start the media server, telling it where the local peer is
 TORRENT_BOOTSTRAP_PEERS=127.0.0.1:51413 TORRENT_ALLOW_PRIVATE_PEERS=true \
-TORRENT_DHT=false TORRENT_TRACKERS=false pnpm start
+TORRENT_DHT=false TORRENT_TRACKERS=false pnpm dev
 ```
 
 Open <http://127.0.0.1:8080/player/> and press **Start session**. You can
@@ -67,19 +67,24 @@ pnpm test:e2e       # local swarm → HLS → Chromium (needs ffmpeg + Chromium)
 pnpm check          # typecheck + lint + format + unit
 ```
 
-## Repository layout (today)
+## Repository layout
 
 ```
-spikes/m0-pipeline/     feasibility spike (to be promoted to apps/media-worker in M2)
+apps/media-worker/      torrent engine, HLS origin, ffmpeg jobs (promoted from the M0 spike)
   src/torrent/          TorrentEngine (WebTorrent) + loopback range source server
-  src/media/            ffprobe, playback planner, playlists, ffmpeg arguments
-  src/subtitles/        charset decoding, SRT/VTT parsing, WebVTT output, RTL fixes
+  src/media/probe.ts    runs ffprobe (parsing lives in media-core)
   src/session/          playback sessions, transcode jobs, admission control
   src/http/             Fastify routes (session API, HLS, diagnostic player)
   src/fixtures/         CC0 test title generator + local seeder
-  test/unit, test/e2e
+packages/media-core/    pure media logic: planner, playlists, ffmpeg arguments,
+                        ffprobe parsing, subtitles/RTL, stream tokens
+docs/adr/               accepted architecture decisions
 docs/feasibility/       spike reports
 ```
+
+Workspace packages export their TypeScript sources under the `source`
+condition (used by `tsx`, Vitest and `tsc`) and compiled `dist/` files by
+default (used in production with plain `node`).
 
 The target layout is in ARCHITECTURE.md §12.
 

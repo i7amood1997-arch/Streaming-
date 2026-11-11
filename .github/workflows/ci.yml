@@ -30,7 +30,7 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test
       - name: Install Chromium for Playwright
-        run: pnpm --filter @streaming/spike-m0-pipeline exec playwright install --with-deps chromium
+        run: pnpm --filter @streaming/media-worker exec playwright install --with-deps chromium
       - run: pnpm test:e2e
       - name: Dependency audit (report only until advisories are triaged)
         run: pnpm audit --prod || true

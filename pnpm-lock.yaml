@@ -27,8 +27,11 @@ importers:
         specifier: 8.72.2
         version: 8.72.2(eslint@10.14.0)(typescript@6.0.3)
 
-  spikes/m0-pipeline:
+  apps/media-worker:
     dependencies:
+      '@streaming/media-core':
+        specifier: workspace:*
+        version: link:../../packages/media-core
       fastify:
         specifier: 5.12.8
         version: 5.12.8
@@ -51,6 +54,22 @@ importers:
       tsx:
         specifier: 4.23.15
         version: 4.23.15
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 5.1.0
+        version: 5.1.0(@types/node@22.20.5)(vite@8.3.8(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.15))
+
+  packages/media-core:
+    dependencies:
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.5
+        version: 22.20.5
       typescript:
         specifier: 6.0.3
         version: 6.0.3

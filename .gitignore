@@ -10,6 +10,6 @@ coverage/
 .data/
 var/
 # Generated test fixtures (re-created deterministically by scripts)
-spikes/m0-pipeline/fixtures/
+apps/media-worker/fixtures/
 test-results/
 playwright-report/

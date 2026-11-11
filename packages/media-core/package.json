@@ -1,0 +1,29 @@
+{
+  "name": "@streaming/media-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure media logic: playback planning, HLS playlists, ffmpeg arguments, ffprobe parsing, subtitles/RTL, stream tokens.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "6.0.3",
+    "vitest": "5.1.0"
+  }
+}

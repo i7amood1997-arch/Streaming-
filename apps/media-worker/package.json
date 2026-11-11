@@ -1,0 +1,31 @@
+{
+  "name": "@streaming/media-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Media worker: authorized torrents -> on-demand HLS (fMP4) + WebVTT. Promoted from the M0 feasibility spike.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "fixtures": "tsx --conditions=source src/fixtures/generate.ts",
+    "seed": "tsx --conditions=source src/seeder-main.ts",
+    "dev": "tsx --conditions=source src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --project unit",
+    "test:e2e": "vitest run --project e2e"
+  },
+  "dependencies": {
+    "@streaming/media-core": "workspace:*",
+    "fastify": "5.12.8",
+    "hls.js": "1.7.4",
+    "webtorrent": "3.0.21",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "playwright": "1.63.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "5.1.0"
+  }
+}

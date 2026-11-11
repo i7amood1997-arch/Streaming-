@@ -1,10 +1,10 @@
 # Architecture
 
-> Status: **Proposed — awaiting approval.** Sections marked ✅ were validated
-> by the M0 feasibility spike (`spikes/m0-pipeline`, evidence in
+> Status: **Approved 2026-11-11** ([ADR 0001](docs/adr/0001-m0-architecture-decisions.md)).
+> Sections marked ✅ were validated by the M0 feasibility spike (evidence in
 > [docs/feasibility/M0-pipeline-spike.md](docs/feasibility/M0-pipeline-spike.md)).
-> Sections marked 🟡 are design proposals that have not been built yet.
-> Decisions that need sign-off are listed in [§14](#14-decisions-requiring-approval).
+> Sections marked 🟡 are approved designs that have not been built yet.
+> Decisions are listed in [§14](#14-decisions).
 
 ## 1. Goals and non-goals
 
@@ -358,7 +358,11 @@ spikes/
 All secrets come from the environment / a secret manager and are never
 committed; see `.env.example`.
 
-## 14. Decisions requiring approval
+## 14. Decisions
+
+All approved on 2026-11-11 and recorded in
+[ADR 0001](docs/adr/0001-m0-architecture-decisions.md). New major decisions
+are proposed here first and recorded as further ADRs once approved.
 
 1. **HLS (fMP4) as the single delivery format**, with on-demand transcode now,
    copy/remux in M2 and pre-packaged ABR in M8 (§3).
@@ -367,9 +371,10 @@ committed; see `.env.example`.
 4. **One SPA + Capacitor + Tauri** for all four platforms (§11).
 5. **Fastify + PostgreSQL/Drizzle + Redis** for the backend (§11).
 6. **Catalog-as-allowlist**: no user-supplied torrents, ever (§8).
-7. **Auth approach**: self-hosted (Argon2id + rotating refresh tokens) vs a
-   managed identity provider — needs product input (M3).
-8. **Metadata source**: Wikidata/Internet Archive only, or also TMDB (licence cost).
+7. **Auth approach**: self-hosted (Argon2id + rotating refresh tokens), no
+   managed identity provider (M3). Revisit if SSO/social login is required.
+8. **Metadata source**: Wikidata and Internet Archive only; TMDB is not used
+   (commercial licence cost). Revisit if metadata coverage proves insufficient.
 
 ## 15. Risk register
 

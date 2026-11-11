@@ -1,6 +1,6 @@
 # M0 feasibility spike — authorized torrent → HLS → iOS-compatible playback
 
-Date: 2026-11-11 · Code: [`spikes/m0-pipeline`](../../spikes/m0-pipeline) ·
+Date: 2026-11-11 · Code: originally `spikes/m0-pipeline`, now [`apps/media-worker`](../../apps/media-worker) and [`packages/media-core`](../../packages/media-core) ·
 Status: **complete for what this environment can verify** (see §5 for what is not verified).
 
 ## 1. Question
