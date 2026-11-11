@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>M0 Pipeline Player (diagnostic)</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #0b0b0f;
+        color: #e8e8ee;
+      }
+      video {
+        width: 100%;
+        max-width: 960px;
+        aspect-ratio: 16 / 9;
+        background: #000;
+        display: block;
+      }
+      /* Inline (non-fullscreen) cue styling. Native iOS fullscreen ignores page CSS,
+         which is why RTL direction is also encoded in the cue text (RLM marks). */
+      video::cue {
+        font-size: 1.1em;
+        background: rgb(0 0 0 / 0.7);
+      }
+      video::cue(:lang(ar)) {
+        font-family: 'SF Arabic', 'Geeza Pro', 'Noto Naskh Arabic', sans-serif;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 12px 0;
+      }
+      button,
+      select {
+        font: inherit;
+        padding: 6px 10px;
+      }
+      pre {
+        white-space: pre-wrap;
+        font-size: 12px;
+        max-width: 960px;
+        color: #9aa0ad;
+      }
+    </style>
+  </head>
+  <body>
+    <p><strong>Diagnostic player for the M0 feasibility spike.</strong> Not the product UI.</p>
+    <video id="video" controls playsinline muted preload="metadata"></video>
+    <div class="row">
+      <select id="quality" aria-label="Quality">
+        <option value="auto">Auto</option>
+        <option value="480p">480p</option>
+        <option value="720p">720p</option>
+        <option value="1080p">1080p</option>
+      </select>
+      <button id="start" type="button">Start session</button>
+      <button id="seek" type="button">Seek +60s</button>
+    </div>
+    <pre id="log" aria-live="polite"></pre>
+    <script src="./vendor/hls.min.js"></script>
+    <script type="module" src="./player.js"></script>
+  </body>
+</html>

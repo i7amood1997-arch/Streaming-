@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+# Runtime working directories (torrent cache, HLS output)
+.data/
+var/
+# Generated test fixtures (re-created deterministically by scripts)
+spikes/m0-pipeline/fixtures/
+test-results/
+playwright-report/
