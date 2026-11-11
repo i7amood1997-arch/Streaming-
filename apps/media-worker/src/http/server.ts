@@ -5,11 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { CreatePlaybackSessionRequestSchema } from '@streaming/contracts';
+import type { PlaybackSessionResponse } from '@streaming/contracts';
 import { z } from 'zod';
 import type { Catalog } from '../catalog.js';
 import type { Config } from '../config.js';
 import { AppError, notFound } from '../errors.js';
-import { QUALITIES } from '@streaming/media-core';
 import {
   buildMasterPlaylist,
   buildMediaPlaylist,
@@ -26,26 +27,6 @@ const CONTENT_TYPES = {
   m4s: 'video/iso.segment',
   vtt: 'text/vtt; charset=utf-8',
 } as const;
-
-const CreateSessionBody = z.object({
-  contentId: z.string().min(1).max(64),
-  quality: z.enum([...QUALITIES, 'auto']).default('auto'),
-  startPositionSec: z
-    .number()
-    .min(0)
-    .max(24 * 3600)
-    .default(0),
-  preferredAudioLanguage: z
-    .string()
-    .regex(/^[a-z]{2,3}$/)
-    .optional(),
-  capabilities: z
-    .object({
-      hevc: z.boolean().default(false),
-      maxHeight: z.number().int().min(144).max(4320).default(1080),
-    })
-    .default({ hevc: false, maxHeight: 1080 }),
-});
 
 const HlsParams = z.object({
   sessionId: z.uuid(),
@@ -114,7 +95,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   }));
 
   app.post('/v1/playback/sessions', async (req, reply) => {
-    const body = CreateSessionBody.parse(req.body);
+    const body = CreatePlaybackSessionRequestSchema.parse(req.body);
     const session = await manager.create({
       contentId: body.contentId,
       quality: body.quality,
@@ -126,7 +107,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     });
     const token = signStreamToken(config.streamTokenSecret, session.id, session.expiresAtSec);
     const base = config.publicBaseUrl ?? '';
-    return reply.code(201).send({
+    const response: PlaybackSessionResponse = {
       sessionId: session.id,
       masterPlaylistUrl: `${base}/v1/hls/${session.id}/${token}/master.m3u8`,
       expiresAt: new Date(session.expiresAtSec * 1000).toISOString(),
@@ -144,7 +125,8 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         rtl: s.rtl,
       })),
       decisions: session.plan.reasons,
-    });
+    };
+    return reply.code(201).send(response);
   });
 
   app.post<{ Params: { id: string } }>(

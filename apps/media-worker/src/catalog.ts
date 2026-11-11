@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { LicenseSchema } from '@streaming/contracts';
 import { z } from 'zod';
 
 /**
@@ -7,13 +8,6 @@ import { z } from 'zod';
  * an explicit licence and provenance, can ever be streamed. There is no API to
  * stream an arbitrary magnet link or infohash.
  */
-const LicenseSchema = z.enum([
-  'public-domain',
-  'CC0-1.0',
-  'CC-BY-3.0',
-  'CC-BY-4.0',
-  'CC-BY-SA-4.0',
-]);
 
 const CatalogEntrySchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,64}$/),
@@ -31,7 +25,6 @@ const CatalogEntrySchema = z.object({
 });
 
 export type CatalogEntry = z.infer<typeof CatalogEntrySchema>;
-export type License = z.infer<typeof LicenseSchema>;
 
 const CatalogSchema = z.object({ version: z.literal(1), entries: z.array(CatalogEntrySchema) });
 

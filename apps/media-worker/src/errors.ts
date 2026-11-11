@@ -1,21 +1,8 @@
-/** Typed domain errors mapped to HTTP responses in one place (http/server.ts). */
-export class AppError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly httpStatus: number,
-    readonly retryAfterSec?: number,
-  ) {
-    super(message);
-    this.name = 'AppError';
-  }
-}
+import { AppError } from '@streaming/contracts';
 
-export const notFound = (what: string) => new AppError('NOT_FOUND', `${what} not found`, 404);
+export { AppError, capacityExceeded, notFound } from '@streaming/contracts';
 
-export const capacityExceeded = (reason: string) =>
-  new AppError('CAPACITY_EXCEEDED', reason, 503, 10);
-
+/** Worker-specific domain errors; mapped to HTTP in http/server.ts. */
 export const segmentNotReady = (index: number) =>
   new AppError('SEGMENT_NOT_READY', `Segment ${index} is not ready yet`, 503, 2);
 

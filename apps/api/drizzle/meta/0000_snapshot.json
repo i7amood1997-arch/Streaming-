@@ -1,0 +1,330 @@
+{
+  "id": "59896de9-e925-4aa4-9ef6-d2b4e64e4dab",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.sources": {
+      "name": "sources",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "title_id": {
+          "name": "title_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "infohash": {
+          "name": "infohash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "torrent": {
+          "name": "torrent",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "video_file_index": {
+          "name": "video_file_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_height": {
+          "name": "max_height",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "video_codec": {
+          "name": "video_codec",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "license": {
+          "name": "license",
+          "type": "license",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "license_url": {
+          "name": "license_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attribution": {
+          "name": "attribution",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provenance_url": {
+          "name": "provenance_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "verified_by": {
+          "name": "verified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_at": {
+          "name": "verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "sources_infohash_key": {
+          "name": "sources_infohash_key",
+          "columns": [
+            {
+              "expression": "infohash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "sources_title_id_titles_id_fk": {
+          "name": "sources_title_id_titles_id_fk",
+          "tableFrom": "sources",
+          "tableTo": "titles",
+          "columnsFrom": ["title_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "sources_infohash_format": {
+          "name": "sources_infohash_format",
+          "value": "\"sources\".\"infohash\" ~ '^[0-9a-f]{40}$'"
+        },
+        "sources_video_file_index_nonneg": {
+          "name": "sources_video_file_index_nonneg",
+          "value": "\"sources\".\"video_file_index\" >= 0"
+        },
+        "sources_verified_pair": {
+          "name": "sources_verified_pair",
+          "value": "(\"sources\".\"verified_by\" IS NULL) = (\"sources\".\"verified_at\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.title_localizations": {
+      "name": "title_localizations",
+      "schema": "",
+      "columns": {
+        "title_id": {
+          "name": "title_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "locale": {
+          "name": "locale",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "synopsis": {
+          "name": "synopsis",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "title_localizations_title_id_titles_id_fk": {
+          "name": "title_localizations_title_id_titles_id_fk",
+          "tableFrom": "title_localizations",
+          "tableTo": "titles",
+          "columnsFrom": ["title_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "title_localizations_title_id_locale_pk": {
+          "name": "title_localizations_title_id_locale_pk",
+          "columns": ["title_id", "locale"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.titles": {
+      "name": "titles",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "title_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "original_title": {
+          "name": "original_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "year": {
+          "name": "year",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "synopsis": {
+          "name": "synopsis",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runtime_sec": {
+          "name": "runtime_sec",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "titles_slug_key": {
+          "name": "titles_slug_key",
+          "columns": [
+            {
+              "expression": "slug",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "titles_slug_format": {
+          "name": "titles_slug_format",
+          "value": "\"titles\".\"slug\" ~ '^[a-z0-9-]{1,64}$'"
+        },
+        "titles_year_range": {
+          "name": "titles_year_range",
+          "value": "\"titles\".\"year\" IS NULL OR \"titles\".\"year\" BETWEEN 1870 AND 2200"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.license": {
+      "name": "license",
+      "schema": "public",
+      "values": ["public-domain", "CC0-1.0", "CC-BY-3.0", "CC-BY-4.0", "CC-BY-SA-4.0"]
+    },
+    "public.title_kind": {
+      "name": "title_kind",
+      "schema": "public",
+      "values": ["movie", "series", "episode"]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
